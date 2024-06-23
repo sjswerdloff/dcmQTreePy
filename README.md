@@ -2,5 +2,5 @@ dcmQTreePy
 
 A multi-platform DICOM object Editor
 
-An homage to DCMTree from IMPAC(R)
+An homage to DCMTree from IMPAC &reg;
 
