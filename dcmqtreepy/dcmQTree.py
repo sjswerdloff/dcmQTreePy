@@ -164,7 +164,7 @@ class DCMQtreePy(QMainWindow):
                         if len(known_private_creators) == 1:
                             known_private_creator = known_private_creators[0]
                             private_block = parent_ds.private_block(group, private_creator=known_private_creator, create=True)
-                            private_block.add_new(private_block_byte, vr_as_string, cast_value)
+                            private_block.add_new(private_block_byte, vr_as_string, cast_list_of_values)
                             logging.warning("Found a private creator to attach private element to")
                         else:
                             logging.error(
