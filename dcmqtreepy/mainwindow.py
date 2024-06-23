@@ -178,8 +178,8 @@ class Ui_MainWindow(object):
         self.actionSave_As.setText(QCoreApplication.translate("MainWindow", "Save As...", None))
         self.actionAdd_Element.setText(QCoreApplication.translate("MainWindow", "Add Element", None))
         self.actionAdd_Private_Element.setText(QCoreApplication.translate("MainWindow", "Add Private Element", None))
-        self.groupBox.setTitle(QCoreApplication.translate("MainWindow", "GroupBox", None))
-        self.groupBox_2.setTitle(QCoreApplication.translate("MainWindow", "GroupBox", None))
+        self.groupBox.setTitle(QCoreApplication.translate("MainWindow", "Files", None))
+        self.groupBox_2.setTitle(QCoreApplication.translate("MainWindow", "DICOM Elements", None))
         self.menuMain_Window.setTitle(QCoreApplication.translate("MainWindow", "File", None))
         self.menuEdit.setTitle(QCoreApplication.translate("MainWindow", "Edit", None))
 
