@@ -97,7 +97,7 @@ class DCMQtreePy(QMainWindow):
         private_block: pydicom.dataset.PrivateBlock = None,
     ) -> pydicom.dataset.PrivateBlock:
         tag_as_string = tree_widget_item.text(0)
-        name_as_string = tree_widget_item.text(1)
+        # name_as_string = tree_widget_item.text(1)
         value_as_string = tree_widget_item.text(2)
         vr_as_string = tree_widget_item.text(3)
         tag = self._convert_tag_as_string_to_tuple(tag_as_string)
@@ -132,7 +132,7 @@ class DCMQtreePy(QMainWindow):
                         parent_ds=seq_elem, tree_widget_item=child, private_block=private_block
                     )
             else:
-                item_number = int(value_as_string)
+                # item_number = int(value_as_string)
                 child_ds = Dataset()
                 my_list = parent_ds.value
                 my_list.append(child_ds)
@@ -168,7 +168,8 @@ class DCMQtreePy(QMainWindow):
                             logging.warning("Found a private creator to attach private element to")
                         else:
                             logging.error(
-                                f"Unable to find private creator for Private element {group:04x},{private_block_byte:02x} element can not be copied/saved"
+                                f"Unable to find private creator for Private \
+                                    element {group:04x},{private_block_byte:02x} element can not be copied/saved"
                             )
 
                 else:
@@ -200,7 +201,8 @@ class DCMQtreePy(QMainWindow):
                                 logging.warning("Found a private creator to attach private element to")
                             else:
                                 logging.error(
-                                    f"Unable to find private creator for Private element {group:04x},{private_block_byte:02x} element can not be copied/saved"
+                                    f"Unable to find private creator for Private \
+                                        element {group:04x},{private_block_byte:02x} element can not be copied/saved"
                                 )
 
                     else:

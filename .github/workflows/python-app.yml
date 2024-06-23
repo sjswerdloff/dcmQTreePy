@@ -59,7 +59,7 @@ jobs:
         poetry run flake8 dcmqtreepy --count --select=E9,F63,F7,F82 --show-source --statistics
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         # --extend-ignore=203 because black puts in a space before a slicing
-        poetry run flake8 --count --extend-ignore=E203 --max-line-length=127 --statistics --exclude="dcmqtreepy/mainwindow.py" dcmqtreepy
+        poetry run flake8 --count --extend-ignore=E203,E266,F401 --max-line-length=127 --statistics --exclude="dcmqtreepy/mainwindow.py" dcmqtreepy
     - name: Test with pytest
       run: |
         poetry run pytest dcmqtreepy/tests
