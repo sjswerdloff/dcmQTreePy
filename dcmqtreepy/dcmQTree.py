@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
 )
 
 from dcmqtreepy import impac_privates
+from dcmqtreepy.add_public_element_dialog import AddPublicElementDialog
 from dcmqtreepy.mainwindow import Ui_MainWindow
 
 
@@ -51,11 +52,44 @@ class DCMQtreePy(QMainWindow):
         self.ui.listWidget.itemSelectionChanged.connect(self.on_item_selection_changed)
         self.ui.actionOpen.triggered.connect(self.on_file_open)
         self.ui.actionSave_As.triggered.connect(self.on_file_save_as)
+        self.ui.actionAdd_Element.triggered.connect(self.on_add_element)
         self.previous_path = Path().home()
         self.previous_save_path = Path().home()
         self.current_dataset = Dataset()
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         pydicom.datadict.add_private_dict_entries("IMPAC", impac_privates.impac_private_dict)
+
+    def _populate_tree_widget_item_from_element(self, parent: QTreeWidgetItem | QTreeWidget, elem: DataElement):
+        if elem.VR != VR.SQ:
+            tree_child_item = QTreeWidgetItem(parent)
+            tree_child_item.setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+            tree_child_item.setText(0, str(elem.tag))
+            tree_child_item.setText(1, elem.name)
+            if elem.VR not in [VR.OB, VR.OW, VR.OB_OW, VR.OD, VR.OF]:
+                if elem.value is None:
+                    tree_child_item.setText(2, "")
+                else:
+                    tree_child_item.setText(2, str(elem.value))
+            else:
+                logging.warning("Need to stash away OB/OW type values")
+            tree_child_item.setText(3, str(elem.VR))
+            tree_child_item.setText(4, elem.keyword)
+        else:
+            tree_child_item = QTreeWidgetItem(parent)
+            tree_child_item.setText(0, str(elem.tag))
+            tree_child_item.setText(1, elem.name)
+            tree_child_item.setText(3, str(elem.VR))
+            tree_child_item.setText(4, elem.keyword)
+            seq_item_count = 0
+            for seq_item in elem:
+                seq_item_count += 1
+                seq_child_item = QTreeWidgetItem(tree_child_item)
+                seq_child_item.setText(0, str(elem.tag))
+                seq_child_item.setText(1, elem.name)
+                seq_child_item.setText(2, str(seq_item_count))
+                seq_child_item.setText(3, str(elem.VR))
+                seq_child_item.setText(4, elem.keyword)
+                self._populate_tree_widget_item_from_dataset(seq_child_item, seq_item)
 
     def _populate_tree_widget_item_from_dataset(self, parent: QTreeWidgetItem | QTreeWidget, ds: Dataset):
         for elem in ds:
@@ -287,6 +321,25 @@ class DCMQtreePy(QMainWindow):
         # del modified_ds[0x300a0782]
         # modified_ds.remove_private_tags() # temporary... first get save as working for public elements
         dcmwrite(Path(file_name), modified_ds, write_like_original=False)
+
+    def on_add_element(self):
+        add_element_dialog = AddPublicElementDialog(self)
+        add_element_dialog.exec()
+        public_element = add_element_dialog.current_public_element
+        if public_element is None:
+            return
+        public_element.value = add_element_dialog.ui.text_edit_element_value.toPlainText()
+        if self.dcm_tree_widget is not None:
+            selected_items = self.dcm_tree_widget.selectedItems()
+            if selected_items is not None and len(selected_items) > 0:
+                selected_item = selected_items[0]
+                vr_as_string = selected_item.text(3)
+                if len(vr_as_string) == 0 or vr_as_string == "SQ":
+                    parent = selected_item
+                else:
+                    parent = selected_item.parent()
+                self._populate_tree_widget_item_from_element(parent, public_element)
+                parent.sortChildren(0, Qt.AscendingOrder)
 
 
 if __name__ == "__main__":
