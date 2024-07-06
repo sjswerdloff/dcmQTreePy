@@ -503,8 +503,6 @@ class DCMQtreePy(QMainWindow):
 
     @Slot()
     def handle_tree_delete_pressed(self, event):
-        print(event)
-        print("tree delete pressed")
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
