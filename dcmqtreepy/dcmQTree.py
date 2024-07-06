@@ -67,6 +67,8 @@ class DCMQtreePy(QMainWindow):
         self.ui.actionSave_As.triggered.connect(self.on_file_save_as)
         self.ui.actionAdd_Element.triggered.connect(self.on_add_element)
         self.ui.actionAdd_Private_Element.triggered.connect(self.on_add_private_element)
+        self.ui.actionDelete.triggered.connect(self.handle_file_list_delete_pressed)
+        self.ui.actionDelete_Element.triggered.connect(self.handle_tree_delete_pressed)
         self.previous_path = Path().home()
         self.previous_save_path = Path().home()
         self.current_dataset = Dataset()
@@ -483,13 +485,56 @@ class DCMQtreePy(QMainWindow):
 
     @Slot()
     def handle_file_list_delete_pressed(self, event):
-        print(event)
-        print("file list delete pressed")
+        current_row = self.ui.listWidget.currentRow()
+        if self.has_edits:
+            cancel_delete = QMessageBox(
+                QMessageBox.Warning,
+                "Current Tree Has Edits",
+                "Continuing will lose current edits",
+                buttons=QMessageBox.Ok | QMessageBox.Cancel,
+            )
+            button = cancel_delete.exec()
+            if button == QMessageBox.Cancel:
+                return
+            else:
+                self.has_edits = False  # or at least behave as if it was
+
+        self.ui.listWidget.takeItem(current_row)
 
     @Slot()
     def handle_tree_delete_pressed(self, event):
         print(event)
         print("tree delete pressed")
+        if self.dcm_tree_widget is not None:
+            selected_items = self.dcm_tree_widget.selectedItems()
+            if selected_items is not None and len(selected_items) > 0:
+                selected_item = selected_items[0]
+                parent = selected_item.parent()
+                child_index = parent.indexOfChild(selected_item)
+
+                tag_as_string = selected_item.text(0)
+                tag = self._convert_tag_as_string_to_tuple(tag_as_string)
+                if tag[0] % 2 == 1:
+                    private_block_byte = tag[1] % 256  # lower 8 bits...
+                    if private_block_byte == 0x10:
+                        is_private_creator = True
+                        next_child = parent.child(child_index + 1)
+                        tag_as_string = next_child.text(0)
+                        tag = self._convert_tag_as_string_to_tuple(tag_as_string)
+                        if tag[0] % 2 == 1:
+                            cancel_delete = QMessageBox(
+                                QMessageBox.Warning,
+                                "Private Block has private elements",
+                                "Delete private elements in block before deleting Private Creator",
+                                buttons=QMessageBox.Ok,
+                            )
+                            cancel_delete.exec()
+                            return
+                        else:
+                            pass  # there are no private elements just after the private creator, so it's ok to delete it
+
+                parent.takeChild(child_index)
+                self.has_edits = True
 
     @Slot()
     def keyPressEvent(self, event: QKeyEvent) -> None:

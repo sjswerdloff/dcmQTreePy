@@ -152,6 +152,8 @@
     <addaction name="actionOpen"/>
     <addaction name="actionSave"/>
     <addaction name="actionSave_As"/>
+    <addaction name="separator"/>
+    <addaction name="actionDelete"/>
    </widget>
    <widget class="QMenu" name="menuEdit">
     <property name="title">
@@ -159,6 +161,7 @@
     </property>
     <addaction name="actionAdd_Element"/>
     <addaction name="actionAdd_Private_Element"/>
+    <addaction name="actionDelete_Element"/>
    </widget>
    <addaction name="menuMain_Window"/>
    <addaction name="menuEdit"/>
@@ -192,6 +195,16 @@
   <action name="actionAdd_Private_Element">
    <property name="text">
     <string>Add Private Element</string>
+   </property>
+  </action>
+  <action name="actionDelete_Element">
+   <property name="text">
+    <string>Delete Element</string>
+   </property>
+  </action>
+  <action name="actionDelete">
+   <property name="text">
+    <string>Delete</string>
    </property>
   </action>
  </widget>
