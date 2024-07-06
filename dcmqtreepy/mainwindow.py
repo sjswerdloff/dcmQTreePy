@@ -67,6 +67,7 @@ class Ui_MainWindow(object):
         if not MainWindow.objectName():
             MainWindow.setObjectName("MainWindow")
         MainWindow.resize(800, 600)
+        MainWindow.setAcceptDrops(True)
         self.actionFile = QAction(MainWindow)
         self.actionFile.setObjectName("actionFile")
         self.actionOpen = QAction(MainWindow)
@@ -97,6 +98,7 @@ class Ui_MainWindow(object):
         self.formLayout.setObjectName("formLayout")
         self.listWidget = QListWidget(self.scrollAreaWidgetContents)
         self.listWidget.setObjectName("listWidget")
+        self.listWidget.setAcceptDrops(True)
         self.listWidget.setAutoFillBackground(True)
         self.listWidget.setSelectionRectVisible(True)
 
@@ -171,7 +173,7 @@ class Ui_MainWindow(object):
     # setupUi
 
     def retranslateUi(self, MainWindow):
-        MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", "MainWindow", None))
+        MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", "DCMQTreePy", None))
         self.actionFile.setText(QCoreApplication.translate("MainWindow", "File", None))
         self.actionOpen.setText(QCoreApplication.translate("MainWindow", "Open", None))
         self.actionSave.setText(QCoreApplication.translate("MainWindow", "Save", None))

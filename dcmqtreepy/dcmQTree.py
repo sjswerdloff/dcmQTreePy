@@ -40,7 +40,9 @@ class DCMQtreePy(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.ui = Ui_MainWindow()
+
         self.ui.setupUi(self)
+
         self.dcm_tree_widget = self.ui.treeWidget
         self.dcm_tree_widget.editTriggers = self.dcm_tree_widget.EditTrigger.NoEditTriggers
         header = self.dcm_tree_widget.header()
@@ -58,6 +60,7 @@ class DCMQtreePy(QMainWindow):
         self.previous_path = Path().home()
         self.previous_save_path = Path().home()
         self.current_dataset = Dataset()
+        self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         pydicom.datadict.add_private_dict_entries("IMPAC", impac_privates.impac_private_dict)
 
@@ -264,6 +267,7 @@ class DCMQtreePy(QMainWindow):
                     cast_value = None
             except Exception:
                 logging.error(f"Failed in casting {value_as_string} to VR of {vr_as_string}")
+                return list()
             cast_values.append(cast_value)
         return cast_values
 
@@ -281,6 +285,16 @@ class DCMQtreePy(QMainWindow):
 
     @Slot()
     def on_item_selection_changed(self):
+        if self.has_edits:
+            cancel_select_alternate = QMessageBox(
+                QMessageBox.Warning,
+                "Current Tree Has Edits",
+                "Continuing will lose current edits",
+                buttons=QMessageBox.Ok | QMessageBox.Cancel,
+            )
+            button = cancel_select_alternate.exec()
+            if button == QMessageBox.Cancel:
+                return
         current_item = self.ui.listWidget.currentItem()
         self.populate_tree_widget_from_file(current_item.text())
 
@@ -313,6 +327,7 @@ class DCMQtreePy(QMainWindow):
             tree_child_item.setText(0, abstract_syntax)
             self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
             tree_child_item.setExpanded(True)
+            self.has_edits = False
 
     def on_file_save_as(self):
         save_path = self.previous_save_path
@@ -341,6 +356,7 @@ class DCMQtreePy(QMainWindow):
         # del modified_ds[0x300a0782]
         # modified_ds.remove_private_tags() # temporary... first get save as working for public elements
         dcmwrite(Path(file_name), modified_ds, write_like_original=False)
+        self.has_edits = False  # not quite true, but the data has been saved, so switching and losing the current edits is OK.
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
@@ -360,6 +376,7 @@ class DCMQtreePy(QMainWindow):
                     parent = selected_item.parent()
                 self._populate_tree_widget_item_from_element(parent, public_element)
                 parent.sortChildren(0, Qt.AscendingOrder)
+                self.has_edits = True
 
     def on_add_private_element(self):
         add_element_dialog = AddPrivateElementDialog(self)
@@ -379,6 +396,13 @@ class DCMQtreePy(QMainWindow):
             value_list = self._convert_text_lines_to_vr_values(plain_text, vr_as_string)
             if len(value_list) == 0:
                 element_value = None
+                invalid_value_msg_box = QMessageBox(
+                    QMessageBox.Warning,
+                    "Invalid Value",
+                    "Value can not be converted to expected VR, using empty value",
+                    QMessageBox.Ok,
+                )
+                invalid_value_msg_box.exec()
             elif len(value_list) == 1:
                 element_value = value_list[0]
             else:
@@ -408,6 +432,23 @@ class DCMQtreePy(QMainWindow):
                     self._populate_tree_widget_item_from_element(parent, private_creator_element)
                 self._populate_tree_widget_item_from_element(parent, private_element)
                 parent.sortChildren(0, Qt.AscendingOrder)
+                self.has_edits = True
+
+    @Slot()
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+            # e.accept()
+
+    @Slot()
+    def dropEvent(self, event):
+        mime_data = event.mimeData()
+        url_list = mime_data.urls()
+        my_file_name_list = [x.toLocalFile() for x in url_list]
+        for my_file_name in my_file_name_list:
+            file_list_item = QListWidgetItem(str(my_file_name))
+            self.ui.listWidget.addItem(file_list_item)
+        event.acceptProposedAction()
 
 
 if __name__ == "__main__":

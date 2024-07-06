@@ -39,6 +39,7 @@ class AddPrivateElementDialog(QDialog, Ui_add_private_element_dialog):
                     cast_value = None
             except Exception:
                 logging.error(f"Failed in casting {value_as_string} to VR of {vr_as_string}")
+                return list()
             cast_values.append(cast_value)
         return cast_values
 

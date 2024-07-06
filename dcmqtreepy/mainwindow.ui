@@ -10,8 +10,11 @@
     <height>600</height>
    </rect>
   </property>
+  <property name="acceptDrops">
+   <bool>true</bool>
+  </property>
   <property name="windowTitle">
-   <string>MainWindow</string>
+   <string>DCMQTreePy</string>
   </property>
   <widget class="QWidget" name="central_widget">
    <layout class="QFormLayout" name="formLayout_5">
@@ -38,6 +41,9 @@
           <layout class="QFormLayout" name="formLayout">
            <item row="0" column="0" colspan="2">
             <widget class="QListWidget" name="listWidget">
+             <property name="acceptDrops">
+              <bool>true</bool>
+             </property>
              <property name="autoFillBackground">
               <bool>true</bool>
              </property>
