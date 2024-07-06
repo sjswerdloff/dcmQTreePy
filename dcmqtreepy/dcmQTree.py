@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 # This Python file uses the following encoding: utf-8
+
 import logging
 import sys
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import List
 
@@ -16,6 +18,7 @@ from pydicom import DataElement, Dataset, Sequence, dcmread, dcmwrite
 from pydicom.valuerep import VR
 from pynetdicom.presentation import build_context
 from PySide6.QtCore import QDateTime, Qt, Slot  # pylint: disable=no-name-in-module
+from PySide6.QtGui import QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
     QApplication,
     QFileDialog,
@@ -53,6 +56,13 @@ class DCMQtreePy(QMainWindow):
         # header.setSectionResizeMode(5, QHeaderView.Stretch)
         self.dcm_tree_widget.itemDoubleClicked.connect(self.on_tree_widget_item_double_clicked)
         self.ui.listWidget.itemSelectionChanged.connect(self.on_item_selection_changed)
+        #     self.tree_del_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.dcm_tree_widget)
+        #     self.tree_del_shortcut.activated.connect(self.handle_tree_delete_pressed)
+        self.file_list_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.ui.listWidget)
+        self.file_list_shortcut.activated.connect(self.handle_file_list_delete_pressed)
+        #     self.del_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self)
+        #     self.del_shortcut.activated.connect(lambda : QMessageBox.information(self,
+        # 'Message', 'Del initiated'))
         self.ui.actionOpen.triggered.connect(self.on_file_open)
         self.ui.actionSave_As.triggered.connect(self.on_file_save_as)
         self.ui.actionAdd_Element.triggered.connect(self.on_add_element)
@@ -259,10 +269,12 @@ class DCMQtreePy(QMainWindow):
             try:
                 cast_value = value_as_string
                 if len(value_as_string) > 0:
-                    if vr_as_string in [VR.SS, VR.US]:
+                    if vr_as_string in [VR.IS, VR.SS, VR.US]:
                         cast_value = int(value_as_string)
                     elif vr_as_string in [VR.FL, VR.FD]:
                         cast_value = float(value_as_string)
+                    elif vr_as_string in [VR.DS]:
+                        cast_value = Decimal(value_as_string)
                 elif vr_as_string in [VR.SS, VR.US, VR.FL, VR.FD]:
                     cast_value = None
             except Exception:
@@ -364,7 +376,26 @@ class DCMQtreePy(QMainWindow):
         public_element = add_element_dialog.current_public_element
         if public_element is None:
             return
-        public_element.value = add_element_dialog.ui.text_edit_element_value.toPlainText()
+        vr_as_string = public_element.VR
+        plain_text = add_element_dialog.ui.text_edit_element_value.toPlainText()
+        element_value = None
+        if plain_text is not None and len(plain_text) > 0:
+            value_list = self._convert_text_lines_to_vr_values(plain_text, vr_as_string)
+            if len(value_list) == 0:
+                element_value = None
+                invalid_value_msg_box = QMessageBox(
+                    QMessageBox.Warning,
+                    "Invalid Value",
+                    "Value can not be converted to expected VR, using empty value",
+                    QMessageBox.Ok,
+                )
+                invalid_value_msg_box.exec()
+            elif len(value_list) == 1:
+                element_value = value_list[0]
+            else:
+                element_value = value_list
+
+        public_element.value = element_value
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
@@ -449,6 +480,21 @@ class DCMQtreePy(QMainWindow):
             file_list_item = QListWidgetItem(str(my_file_name))
             self.ui.listWidget.addItem(file_list_item)
         event.acceptProposedAction()
+
+    @Slot()
+    def handle_file_list_delete_pressed(self, event):
+        print(event)
+        print("file list delete pressed")
+
+    @Slot()
+    def handle_tree_delete_pressed(self, event):
+        print(event)
+        print("tree delete pressed")
+
+    @Slot()
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Delete:
+            print("Delete key was pressed")
 
 
 if __name__ == "__main__":

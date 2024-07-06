@@ -100,6 +100,7 @@ class Ui_MainWindow(object):
         self.listWidget.setObjectName("listWidget")
         self.listWidget.setAcceptDrops(True)
         self.listWidget.setAutoFillBackground(True)
+        self.listWidget.setEditTriggers(QAbstractItemView.AllEditTriggers)
         self.listWidget.setSelectionRectVisible(True)
 
         self.formLayout.setWidget(0, QFormLayout.SpanningRole, self.listWidget)
