@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>add_element_dialog</class>
- <widget class="QDialog" name="add_element_dialog">
+ <class>add_private_element_dialog</class>
+ <widget class="QDialog" name="add_private_element_dialog">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -201,6 +201,9 @@
       <height>20</height>
      </rect>
     </property>
+    <property name="editable">
+     <bool>false</bool>
+    </property>
    </widget>
   </widget>
  </widget>
@@ -209,7 +212,7 @@
   <connection>
    <sender>buttonBox</sender>
    <signal>accepted()</signal>
-   <receiver>add_element_dialog</receiver>
+   <receiver>add_private_element_dialog</receiver>
    <slot>accept()</slot>
    <hints>
     <hint type="sourcelabel">
@@ -225,7 +228,7 @@
   <connection>
    <sender>buttonBox</sender>
    <signal>rejected()</signal>
-   <receiver>add_element_dialog</receiver>
+   <receiver>add_private_element_dialog</receiver>
    <slot>reject()</slot>
    <hints>
     <hint type="sourcelabel">

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
 )
 
 from dcmqtreepy import impac_privates
+from dcmqtreepy.add_private_element_dialog import AddPrivateElementDialog
 from dcmqtreepy.add_public_element_dialog import AddPublicElementDialog
 from dcmqtreepy.mainwindow import Ui_MainWindow
 
@@ -53,6 +54,7 @@ class DCMQtreePy(QMainWindow):
         self.ui.actionOpen.triggered.connect(self.on_file_open)
         self.ui.actionSave_As.triggered.connect(self.on_file_save_as)
         self.ui.actionAdd_Element.triggered.connect(self.on_add_element)
+        self.ui.actionAdd_Private_Element.triggered.connect(self.on_add_private_element)
         self.previous_path = Path().home()
         self.previous_save_path = Path().home()
         self.current_dataset = Dataset()
@@ -247,6 +249,24 @@ class DCMQtreePy(QMainWindow):
                 parent_ds.add(elem)
         return private_block
 
+    def _convert_text_lines_to_vr_values(self, text_lines: str, vr_as_string: str) -> list:
+        text_list = text_lines.splitlines()
+        cast_values = list()
+        for value_as_string in text_list:
+            try:
+                cast_value = value_as_string
+                if len(value_as_string) > 0:
+                    if vr_as_string in [VR.SS, VR.US]:
+                        cast_value = int(value_as_string)
+                    elif vr_as_string in [VR.FL, VR.FD]:
+                        cast_value = float(value_as_string)
+                elif vr_as_string in [VR.SS, VR.US, VR.FL, VR.FD]:
+                    cast_value = None
+            except Exception:
+                logging.error(f"Failed in casting {value_as_string} to VR of {vr_as_string}")
+            cast_values.append(cast_value)
+        return cast_values
+
     def _convert_tag_as_string_to_tuple(self, tag_as_string: str) -> tuple[int, int]:
         first_split = tag_as_string.split("(")[1]
         group = first_split.split(",")[0]
@@ -339,6 +359,54 @@ class DCMQtreePy(QMainWindow):
                 else:
                     parent = selected_item.parent()
                 self._populate_tree_widget_item_from_element(parent, public_element)
+                parent.sortChildren(0, Qt.AscendingOrder)
+
+    def on_add_private_element(self):
+        add_element_dialog = AddPrivateElementDialog(self)
+        add_element_dialog.exec()
+        if add_element_dialog.current_private_block is None:
+            return
+        block = add_element_dialog.current_private_block
+        private_creator = block.private_creator
+        group = block.group
+        private_element = add_element_dialog.current_private_block[add_element_dialog.current_byte_offset]
+        if private_element is None:
+            return
+        vr_as_string = private_element.VR
+        plain_text = add_element_dialog.ui.text_edit_element_value.toPlainText()
+        element_value = None
+        if plain_text is not None and len(plain_text) > 0:
+            value_list = self._convert_text_lines_to_vr_values(plain_text, vr_as_string)
+            if len(value_list) == 0:
+                element_value = None
+            elif len(value_list) == 1:
+                element_value = value_list[0]
+            else:
+                element_value = value_list
+        private_element.value = element_value
+        if self.dcm_tree_widget is not None:
+            selected_items = self.dcm_tree_widget.selectedItems()
+            if selected_items is not None and len(selected_items) > 0:
+                selected_item = selected_items[0]
+                vr_as_string = selected_item.text(3)
+                if len(vr_as_string) == 0 or vr_as_string == "SQ":
+                    parent = selected_item
+                else:
+                    parent = selected_item.parent()
+                parent.childCount()
+
+                children_tuples = [
+                    self._convert_tag_as_string_to_tuple(parent.child(x).text(0)) for x in range(parent.childCount())
+                ]
+                is_private_block_already_present = False
+                for child_tuple in children_tuples:
+                    if child_tuple[0] == block.group and child_tuple[1] == 0x10:
+                        is_private_block_already_present = True
+
+                if not is_private_block_already_present:
+                    private_creator_element = DataElement((block.group, 0x10), "LO", block.private_creator)
+                    self._populate_tree_widget_item_from_element(parent, private_creator_element)
+                self._populate_tree_widget_item_from_element(parent, private_element)
                 parent.sortChildren(0, Qt.AscendingOrder)
 
 
