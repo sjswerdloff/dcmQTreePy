@@ -71,6 +71,8 @@ class DCMQtreePy(QMainWindow):
         self.ui.actionDelete_Element.triggered.connect(self.handle_tree_delete_pressed)
         self.previous_path = Path().home()
         self.previous_save_path = Path().home()
+        self.current_list_item = None
+        self.reverting_list_item = False
         self.current_dataset = Dataset()
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
@@ -299,17 +301,29 @@ class DCMQtreePy(QMainWindow):
 
     @Slot()
     def on_item_selection_changed(self):
+        if self.reverting_list_item:
+            self.reverting_list_item = False
+            return
+        prev_item = self.current_list_item
         if self.has_edits:
-            cancel_select_alternate = QMessageBox(
-                QMessageBox.Warning,
-                "Current Tree Has Edits",
-                "Continuing will lose current edits",
+            # cancel_select_alternate = QMessageBox(
+            #     QMessageBox.icon.Warning,
+            #     "Current Tree Has Edits",
+            #     "Continuing will lose current edits",
+            #     buttons=QMessageBox.Ok | QMessageBox.Cancel,
+            # )
+            button = self.non_native_warning_message(
+                title="Current Tree Has Edits",
+                text="Continuing will lose current edits",
                 buttons=QMessageBox.Ok | QMessageBox.Cancel,
             )
-            button = cancel_select_alternate.exec()
             if button == QMessageBox.Cancel:
+                if prev_item is not None:
+                    self.reverting_list_item = True
+                    self.ui.listWidget.setCurrentItem(prev_item)
                 return
         current_item = self.ui.listWidget.currentItem()
+        self.current_list_item = current_item
         self.populate_tree_widget_from_file(current_item.text())
 
     @Slot()
@@ -326,6 +340,7 @@ class DCMQtreePy(QMainWindow):
             file_list_item = QListWidgetItem(str(file_name))
             self.ui.listWidget.addItem(file_list_item)
             self.populate_tree_widget_from_file(file_name)
+            self.current_list_item = file_list_item
 
     def populate_tree_widget_from_file(self, file_name: str | Path):
         if file_name:
@@ -538,6 +553,22 @@ class DCMQtreePy(QMainWindow):
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Delete:
             print("Delete key was pressed")
+
+    def non_native_warning_message(self, title: str = "Warning Message", text: str = "", buttons=None) -> QMessageBox.button:
+        app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
+
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Warning)
+        if text is None:
+            msg_text = " failed. Please check log for more information"
+        else:
+            msg_text = text
+        dlg.setText(msg_text)
+        dlg.setWindowTitle(title)
+        dlg.setStandardButtons(buttons)
+        button = dlg.exec()
+        app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, False)
+        return button
 
 
 if __name__ == "__main__":
