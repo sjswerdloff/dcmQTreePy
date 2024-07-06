@@ -306,12 +306,6 @@ class DCMQtreePy(QMainWindow):
             return
         prev_item = self.current_list_item
         if self.has_edits:
-            # cancel_select_alternate = QMessageBox(
-            #     QMessageBox.icon.Warning,
-            #     "Current Tree Has Edits",
-            #     "Continuing will lose current edits",
-            #     buttons=QMessageBox.Ok | QMessageBox.Cancel,
-            # )
             button = self.non_native_warning_message(
                 title="Current Tree Has Edits",
                 text="Continuing will lose current edits",
@@ -400,13 +394,10 @@ class DCMQtreePy(QMainWindow):
             value_list = self._convert_text_lines_to_vr_values(plain_text, vr_as_string)
             if len(value_list) == 0:
                 element_value = None
-                invalid_value_msg_box = QMessageBox(
-                    QMessageBox.Warning,
-                    "Invalid Value",
-                    "Value can not be converted to expected VR, using empty value",
-                    QMessageBox.Ok,
+                self.non_native_warning_message(
+                    "Invalid Value", "Value can not be converted to expected VR, using empty value", QMessageBox.Ok
                 )
-                invalid_value_msg_box.exec()
+
             elif len(value_list) == 1:
                 element_value = value_list[0]
             else:
@@ -444,13 +435,9 @@ class DCMQtreePy(QMainWindow):
             value_list = self._convert_text_lines_to_vr_values(plain_text, vr_as_string)
             if len(value_list) == 0:
                 element_value = None
-                invalid_value_msg_box = QMessageBox(
-                    QMessageBox.Warning,
-                    "Invalid Value",
-                    "Value can not be converted to expected VR, using empty value",
-                    QMessageBox.Ok,
+                self.non_native_warning_message(
+                    "Invalid Value", "Value can not be converted to expected VR, using empty value", QMessageBox.Ok
                 )
-                invalid_value_msg_box.exec()
             elif len(value_list) == 1:
                 element_value = value_list[0]
             else:
@@ -502,13 +489,9 @@ class DCMQtreePy(QMainWindow):
     def handle_file_list_delete_pressed(self, event):
         current_row = self.ui.listWidget.currentRow()
         if self.has_edits:
-            cancel_delete = QMessageBox(
-                QMessageBox.Warning,
-                "Current Tree Has Edits",
-                "Continuing will lose current edits",
-                buttons=QMessageBox.Ok | QMessageBox.Cancel,
+            button = self.non_native_warning_message(
+                "Current Tree Has Edits", "Continuing will lose current edits", buttons=QMessageBox.Ok | QMessageBox.Cancel
             )
-            button = cancel_delete.exec()
             if button == QMessageBox.Cancel:
                 return
             else:
@@ -535,13 +518,11 @@ class DCMQtreePy(QMainWindow):
                         tag_as_string = next_child.text(0)
                         tag = self._convert_tag_as_string_to_tuple(tag_as_string)
                         if tag[0] % 2 == 1:
-                            cancel_delete = QMessageBox(
-                                QMessageBox.Warning,
+                            self.non_native_warning_message(
                                 "Private Block has private elements",
                                 "Delete private elements in block before deleting Private Creator",
                                 buttons=QMessageBox.Ok,
                             )
-                            cancel_delete.exec()
                             return
                         else:
                             pass  # there are no private elements just after the private creator, so it's ok to delete it
