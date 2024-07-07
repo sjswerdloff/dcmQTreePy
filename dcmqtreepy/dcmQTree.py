@@ -299,7 +299,6 @@ class DCMQtreePy(QMainWindow):
         else:
             return False
 
-    @Slot()
     def on_item_selection_changed(self):
         if self.reverting_list_item:
             self.reverting_list_item = False
@@ -320,7 +319,6 @@ class DCMQtreePy(QMainWindow):
         self.current_list_item = current_item
         self.populate_tree_widget_from_file(current_item.text())
 
-    @Slot()
     def on_tree_widget_item_double_clicked(self, item: QTreeWidgetItem, column: int):
         if self._isEditable(column):
             self.dcm_tree_widget.editItem(item, column)
@@ -536,6 +534,7 @@ class DCMQtreePy(QMainWindow):
             print("Delete key was pressed")
 
     def non_native_warning_message(self, title: str = "Warning Message", text: str = "", buttons=None) -> QMessageBox.button:
+        app = QApplication.instance()
         app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
 
         dlg = QMessageBox(self)
@@ -552,8 +551,12 @@ class DCMQtreePy(QMainWindow):
         return button
 
 
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
     widget = DCMQtreePy()
     widget.show()
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
