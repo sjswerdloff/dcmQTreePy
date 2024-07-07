@@ -1,6 +1,7 @@
 import logging
 
 from pydicom import DataElement, datadict
+from pydicom.valuerep import VR
 from PySide6.QtWidgets import QDialog
 
 from dcmqtreepy.ui_add_element_dialog import Ui_add_element_dialog
