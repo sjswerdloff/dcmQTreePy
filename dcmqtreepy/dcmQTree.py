@@ -522,8 +522,6 @@ class DCMQtreePy(QMainWindow):
                                 buttons=QMessageBox.Ok,
                             )
                             return
-
-
                 parent.takeChild(child_index)
                 self.has_edits = True
 
