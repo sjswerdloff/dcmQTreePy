@@ -1,5 +1,7 @@
 {
     "files": [
+        "add_element_dialog.ui",
+        "add_private_element_dialog.ui",
         "main.py",
         "mainwindow.ui"
     ]

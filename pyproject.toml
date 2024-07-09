@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "dcmqtreepy"
-version = "0.1.0"
+version = "0.2.0"
 description = "A PySide6 and pydicom based DICOM object editor"
 authors = ["Stuart Swerdloff <sjswerdloff@gmail.com>"]
 license = "Apache2"
@@ -23,3 +23,6 @@ pre-commit = "^3.7.1"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+dcmQTreePy = "dcmqtreepy.dcmQTree:main"

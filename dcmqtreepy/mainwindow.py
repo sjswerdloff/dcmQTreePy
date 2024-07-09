@@ -67,6 +67,7 @@ class Ui_MainWindow(object):
         if not MainWindow.objectName():
             MainWindow.setObjectName("MainWindow")
         MainWindow.resize(800, 600)
+        MainWindow.setAcceptDrops(True)
         self.actionFile = QAction(MainWindow)
         self.actionFile.setObjectName("actionFile")
         self.actionOpen = QAction(MainWindow)
@@ -79,6 +80,10 @@ class Ui_MainWindow(object):
         self.actionAdd_Element.setObjectName("actionAdd_Element")
         self.actionAdd_Private_Element = QAction(MainWindow)
         self.actionAdd_Private_Element.setObjectName("actionAdd_Private_Element")
+        self.actionDelete_Element = QAction(MainWindow)
+        self.actionDelete_Element.setObjectName("actionDelete_Element")
+        self.actionDelete = QAction(MainWindow)
+        self.actionDelete.setObjectName("actionDelete")
         self.central_widget = QWidget(MainWindow)
         self.central_widget.setObjectName("central_widget")
         self.formLayout_5 = QFormLayout(self.central_widget)
@@ -97,7 +102,9 @@ class Ui_MainWindow(object):
         self.formLayout.setObjectName("formLayout")
         self.listWidget = QListWidget(self.scrollAreaWidgetContents)
         self.listWidget.setObjectName("listWidget")
+        self.listWidget.setAcceptDrops(True)
         self.listWidget.setAutoFillBackground(True)
+        self.listWidget.setEditTriggers(QAbstractItemView.AllEditTriggers)
         self.listWidget.setSelectionRectVisible(True)
 
         self.formLayout.setWidget(0, QFormLayout.SpanningRole, self.listWidget)
@@ -161,8 +168,11 @@ class Ui_MainWindow(object):
         self.menuMain_Window.addAction(self.actionOpen)
         self.menuMain_Window.addAction(self.actionSave)
         self.menuMain_Window.addAction(self.actionSave_As)
+        self.menuMain_Window.addSeparator()
+        self.menuMain_Window.addAction(self.actionDelete)
         self.menuEdit.addAction(self.actionAdd_Element)
         self.menuEdit.addAction(self.actionAdd_Private_Element)
+        self.menuEdit.addAction(self.actionDelete_Element)
 
         self.retranslateUi(MainWindow)
 
@@ -171,13 +181,15 @@ class Ui_MainWindow(object):
     # setupUi
 
     def retranslateUi(self, MainWindow):
-        MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", "MainWindow", None))
+        MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", "DCMQTreePy", None))
         self.actionFile.setText(QCoreApplication.translate("MainWindow", "File", None))
         self.actionOpen.setText(QCoreApplication.translate("MainWindow", "Open", None))
         self.actionSave.setText(QCoreApplication.translate("MainWindow", "Save", None))
         self.actionSave_As.setText(QCoreApplication.translate("MainWindow", "Save As...", None))
         self.actionAdd_Element.setText(QCoreApplication.translate("MainWindow", "Add Element", None))
         self.actionAdd_Private_Element.setText(QCoreApplication.translate("MainWindow", "Add Private Element", None))
+        self.actionDelete_Element.setText(QCoreApplication.translate("MainWindow", "Delete Element", None))
+        self.actionDelete.setText(QCoreApplication.translate("MainWindow", "Delete", None))
         self.groupBox.setTitle(QCoreApplication.translate("MainWindow", "Files", None))
         self.groupBox_2.setTitle(QCoreApplication.translate("MainWindow", "DICOM Elements", None))
         self.menuMain_Window.setTitle(QCoreApplication.translate("MainWindow", "File", None))
