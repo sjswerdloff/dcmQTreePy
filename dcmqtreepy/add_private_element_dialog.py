@@ -66,9 +66,9 @@ class AddPrivateElementDialog(QDialog, Ui_add_private_element_dialog):
         try:
             dict_entry_tuple = datadict.get_private_entry((group, element), creator)
             vr = dict_entry_tuple[0]
-            vm = dict_entry_tuple[1]
+            # vm = dict_entry_tuple[1]
             name = dict_entry_tuple[2]
-            is_retired = dict_entry_tuple[3]
+            # is_retired = dict_entry_tuple[3]
             # keyword = dict_entry_tuple[4]
         except KeyError:
             logging.warning(f"Not found in private dictionary: {group:04x},{element:04x} {creator}")
