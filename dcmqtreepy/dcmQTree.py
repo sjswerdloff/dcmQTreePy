@@ -421,8 +421,8 @@ class DCMQtreePy(QMainWindow):
         if add_element_dialog.current_private_block is None:
             return
         block = add_element_dialog.current_private_block
-        private_creator = block.private_creator
-        group = block.group
+        # private_creator = block.private_creator
+        # group = block.group
         private_element = add_element_dialog.current_private_block[add_element_dialog.current_byte_offset]
         if private_element is None:
             return
@@ -511,7 +511,7 @@ class DCMQtreePy(QMainWindow):
                 if tag[0] % 2 == 1:
                     private_block_byte = tag[1] % 256  # lower 8 bits...
                     if private_block_byte == 0x10:
-                        is_private_creator = True
+                        # is_private_creator = True
                         next_child = parent.child(child_index + 1)
                         tag_as_string = next_child.text(0)
                         tag = self._convert_tag_as_string_to_tuple(tag_as_string)
@@ -522,8 +522,7 @@ class DCMQtreePy(QMainWindow):
                                 buttons=QMessageBox.Ok,
                             )
                             return
-                        else:
-                            pass  # there are no private elements just after the private creator, so it's ok to delete it
+
 
                 parent.takeChild(child_index)
                 self.has_edits = True
