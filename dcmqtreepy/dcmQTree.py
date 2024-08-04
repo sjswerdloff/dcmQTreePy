@@ -82,7 +82,7 @@ class DCMQtreePy(QMainWindow):
             try:
                 pydicom.datadict.add_private_dict_entries(creator, private_dict)
                 logging.warning(f"Private dictionary for {creator} has been loaded")
-            except:
+            except ValueError:
                 logging.error(f"Unable to load private dictionary for {creator}")
 
         # pydicom.datadict.add_private_dict_entries("IMPAC", impac_privates.impac_private_dict)
