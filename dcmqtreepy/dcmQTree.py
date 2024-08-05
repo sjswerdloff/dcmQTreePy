@@ -36,6 +36,9 @@ from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
 from dcmqtreepy import impac_privates
 from dcmqtreepy.add_private_element_dialog import AddPrivateElementDialog
 from dcmqtreepy.add_public_element_dialog import AddPublicElementDialog
+from dcmqtreepy.import_hex_legible_private_element_lists import (
+    pydicom_private_dicts_from_json,
+)
 from dcmqtreepy.mainwindow import Ui_MainWindow
 from dcmqtreepy.new_privates import new_private_dictionaries
 
@@ -78,12 +81,27 @@ class DCMQtreePy(QMainWindow):
         self.current_dataset = Dataset()
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
+        logging.info("Loading Known Private Dictionaries")
         for creator, private_dict in new_private_dictionaries.items():
             try:
                 pydicom.datadict.add_private_dict_entries(creator, private_dict)
                 logging.warning(f"Private dictionary for {creator} has been loaded")
             except ValueError:
                 logging.error(f"Unable to load private dictionary for {creator}")
+
+        json_privates_file = "sample_privates.json"
+        logging.info(f"Loading Private Dictionaries from {json_privates_file}")
+
+        try:
+            private_dictionaries_from_json = pydicom_private_dicts_from_json(json_privates_file)
+            for creator, private_dict in new_private_dictionaries.items():
+                try:
+                    pydicom.datadict.add_private_dict_entries(creator, private_dict)
+                    logging.warning(f"Private dictionary for {creator} has been loaded")
+                except ValueError:
+                    logging.error(f"Unable to load private dictionary for {creator}")
+        except Exception as json_privates_exc:
+            logging.error(json_privates_exc)
 
         # pydicom.datadict.add_private_dict_entries("IMPAC", impac_privates.impac_private_dict)
 
