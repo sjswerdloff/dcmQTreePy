@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This Python file uses the following encoding: utf-8
-
+import atexit
 import logging
 import sys
 from datetime import datetime
@@ -17,8 +17,13 @@ import tomli
 from pydicom import DataElement, Dataset, Sequence, dcmread, dcmwrite
 from pydicom.valuerep import VR
 from pynetdicom.presentation import build_context
-from PySide6.QtCore import QDateTime, Qt, Slot  # pylint: disable=no-name-in-module
-from PySide6.QtGui import QKeyEvent, QKeySequence, QShortcut
+from PySide6.QtCore import (  # pylint: disable=no-name-in-module
+    QDateTime,
+    QEvent,
+    Qt,
+    Slot,
+)
+from PySide6.QtGui import QAction, QActionEvent, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
     QApplication,
     QFileDialog,
@@ -26,10 +31,13 @@ from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
+    QMenuBar,
     QMessageBox,
     QTreeWidget,
     QTreeWidgetItem,
     QTreeWidgetItemIterator,
+    QWhatsThis,
     QWidget,
 )
 
@@ -38,15 +46,19 @@ from dcmqtreepy.add_private_element_dialog import AddPrivateElementDialog
 from dcmqtreepy.add_public_element_dialog import AddPublicElementDialog
 from dcmqtreepy.mainwindow import Ui_MainWindow
 from dcmqtreepy.new_privates import new_private_dictionaries
+from dcmqtreepy.qt_assistant_launcher import HelpAssistant
 
 
 class DCMQtreePy(QMainWindow):
     def __init__(self, parent=None):
+        # Force non-native menubar, otherwise getting help while on the menu doesn't work
+        QApplication.instance().setAttribute(Qt.AA_DontUseNativeMenuBar, True)
+
         super().__init__(parent)
         self.ui = Ui_MainWindow()
 
         self.ui.setupUi(self)
-
+        self.logger = logging.getLogger(__name__)
         self.dcm_tree_widget = self.ui.treeWidget
         self.dcm_tree_widget.editTriggers = self.dcm_tree_widget.EditTrigger.NoEditTriggers
         header = self.dcm_tree_widget.header()
@@ -84,8 +96,111 @@ class DCMQtreePy(QMainWindow):
                 logging.warning(f"Private dictionary for {creator} has been loaded")
             except ValueError:
                 logging.error(f"Unable to load private dictionary for {creator}")
+        # In __init__ after setting up the UI
+        self.installEventFilter(self)
+        QApplication.instance().installEventFilter(self)
 
+        self.help_assistant = HelpAssistant(self)
+        self.help_assistant.setup_assistant("help/dcmqtreepy-qhcp.qhc")
+        # Register cleanup with atexit
+        atexit.register(self.help_assistant.cleanup)
+
+        # Connect F1 key to context-sensitive help
+        self.help_shortcut_f1 = QShortcut(QKeySequence("F1"), self)
+        self.help_shortcut_f1.activated.connect(self.show_context_help)
+        self.help_shortcut_f1.setContext(Qt.ApplicationShortcut)  # Make it work application-wide
+
+        # Set help_id properties for various widgets
+        self.setProperty("help_id", "dicom")
+        self.ui.actionOpen.setProperty("help_id", "open_file")
+        self.ui.actionSave.setProperty("help_id", "save_file")
+        self.ui.actionSave_As.setProperty("help_id", "save_as_file")
+        self.ui.actionAdd_Element.setProperty("help_id", "add_element")
+        self.ui.actionAdd_Private_Element.setProperty("help_id", "add_private_element")
+        self.ui.actionDelete.setProperty("help_id", "delete_file")
+        self.ui.actionDelete_Element.setProperty("help_id", "delete_element")
+
+        self.dcm_tree_widget.setProperty("help_id", "dicom_tree")
+        self.ui.listWidget.setProperty("help_id", "file_list")
         # pydicom.datadict.add_private_dict_entries("IMPAC", impac_privates.impac_private_dict)
+        # Track current menu context
+        self.current_menu_action = None
+
+        # Connect all actions to track when they're hovered
+        # Correctly access the menu bar and all its actions
+        menu_bar = self.menuBar()
+        for menu in menu_bar.findChildren(QMenu):
+            for action in menu.actions():
+                action.hovered.connect(lambda act=action: self.track_menu_action(act))
+        # # Connect all menu actions to track when they're hovered
+        # for action in self.ui.actionOpen.parentWidget().actions():
+        #     action.hovered.connect(lambda act=action: self.track_menu_action(act))
+        # Set up context-sensitive help for menu actions
+        self.setup_action_help()
+
+    def setup_action_help(self):
+        """Set up context-sensitive help for all menu actions"""
+        # File menu actions
+        self.ui.actionOpen.setWhatsThis("Opens a DICOM file")
+        self.ui.actionSave.setWhatsThis("Saves the current DICOM file")
+        self.ui.actionSave_As.setWhatsThis("Saves the current DICOM file with a new name")
+        self.ui.actionAdd_Element.setWhatsThis("Adds a new public DICOM element")
+        self.ui.actionAdd_Private_Element.setWhatsThis("Adds a new private DICOM element")
+        self.ui.actionDelete.setWhatsThis("Deletes the selected item")
+        self.ui.actionDelete_Element.setWhatsThis("Deletes the selected DICOM element")
+
+        # Also map these actions to help context IDs for F1 help
+        self.ui.actionOpen.setProperty("help_id", "open_file")
+        self.ui.actionSave.setProperty("help_id", "save_file")
+        self.ui.actionSave_As.setProperty("help_id", "save_as_file")
+        self.ui.actionAdd_Element.setProperty("help_id", "add_element")
+        self.ui.actionAdd_Private_Element.setProperty("help_id", "add_private_element")
+        self.ui.actionDelete.setProperty("help_id", "delete_file")
+        self.ui.actionDelete_Element.setProperty("help_id", "delete_element")
+
+        # Create Help menu
+        self.setup_help_menu()
+
+    def setup_help_menu(self):
+        """Create a Help menu with direct topic links"""
+        help_menu = self.menuBar().addMenu("&Help")
+
+        # Add standard "What's This" action
+        whats_this_action = QWhatsThis.createAction(self)
+        whats_this_action.setText("Context Help Mode")
+        whats_this_action.setShortcut("Shift+F1")
+        help_menu.addAction(whats_this_action)
+
+        help_menu.addSeparator()
+
+        # Add direct topic links
+        help_menu.addAction("dcmQTreePy Overview").triggered.connect(lambda: self.help_assistant.show_help_topic("dicom"))
+
+        help_menu.addAction("File Operations").triggered.connect(
+            lambda: self.help_assistant.show_help_topic("file_operations")
+        )
+
+        help_menu.addAction("Editing DICOM Elements").triggered.connect(
+            lambda: self.help_assistant.show_help_topic("dicom_elements")
+        )
+
+        help_menu.addAction("Private Elements").triggered.connect(
+            lambda: self.help_assistant.show_help_topic("private_elements")
+        )
+
+        help_menu.addAction("Keyboard Shortcuts").triggered.connect(
+            lambda: self.help_assistant.show_help_topic("keyboard_shortcuts")
+        )
+
+    def track_menu_action(self, action):
+        """Keep track of which menu action is currently highlighted"""
+        self.current_menu_action = action
+        self.logger.debug(f"Current menu action: {action.text()}")
+
+        # Also update help_id if available
+        help_id = action.property("help_id")
+        if help_id:
+            self.logger.debug(f"Action has help_id: {help_id}")
 
     def _populate_tree_widget_item_from_element(self, parent: QTreeWidgetItem | QTreeWidget, elem: DataElement):
         if elem.VR != VR.SQ:
@@ -416,6 +531,7 @@ class DCMQtreePy(QMainWindow):
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
+        add_element_dialog.setProperty("help_id", "add_public_element_dialog")
         add_element_dialog.exec()
         public_element = add_element_dialog.current_public_element
         if public_element is None:
@@ -452,6 +568,8 @@ class DCMQtreePy(QMainWindow):
 
     def on_add_private_element(self):
         add_element_dialog = AddPrivateElementDialog(self)
+        add_element_dialog.setProperty("help_id", "add_private_element_dialog")
+
         add_element_dialog.exec()
         if add_element_dialog.current_private_block is None:
             return
@@ -560,10 +678,59 @@ class DCMQtreePy(QMainWindow):
                 parent.takeChild(child_index)
                 self.has_edits = True
 
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key.Key_F1:
+            # Check if we have a current menu action
+            if self.current_menu_action:
+                help_id = self.current_menu_action.property("help_id")
+                if help_id:
+                    self.logger.debug(f"Showing help for menu action: {self.current_menu_action.text()}, help_id: {help_id}")
+                    self.help_assistant.show_help_topic(help_id)
+                    return True
+            # Check if this is coming from a menu
+            if isinstance(obj, QMenu) or isinstance(obj, QAction):
+                help_id = obj.property("help_id")
+                if help_id:
+                    self.help_assistant.show_help_topic(help_id)
+                    return True
+                # If the menu item doesn't have a help_id, check its parent menu
+                elif hasattr(obj, "parent") and obj.parent():
+                    help_id = obj.parent().property("help_id")
+                    if help_id:
+                        self.help_assistant.show_help_topic(help_id)
+                        return True
+
+            # If we couldn't find context-specific help, fall back to the general handler
+            self.show_context_help()
+            return True
+
+        # For all other events, let the default handler take care of it
+        return super().eventFilter(obj, event)
+
     @Slot()
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Delete:
             print("Delete key was pressed")
+        elif event.key() == Qt.Key.Key_F1:
+            # Instead of directly calling show_context_help, check if a menu is active
+            menu_widget = QApplication.activePopupWidget()
+            if menu_widget and isinstance(menu_widget, QMenu):
+                # A menu is active, handle menu-specific context help
+                action = menu_widget.activeAction()
+                if action:
+                    help_id = action.property("help_id")
+                    if help_id:
+                        self.help_assistant.show_help_topic(help_id)
+                        event.accept()
+                        return
+
+            # If we get here, either no menu is active or no help_id was found
+            # Fall back to regular context help
+            self.show_context_help()
+            event.accept()
+        else:
+            # For other keys, let the parent class handle it
+            super().keyPressEvent(event)
 
     def non_native_warning_message(self, title: str = "Warning Message", text: str = "", buttons=None) -> QMessageBox.button:
         app = QApplication.instance()
@@ -578,9 +745,80 @@ class DCMQtreePy(QMainWindow):
         dlg.setText(msg_text)
         dlg.setWindowTitle(title)
         dlg.setStandardButtons(buttons)
+        dlg.setProperty("help_id", "warnings")
         button = dlg.exec()
         app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, False)
         return button
+
+    def show_context_help(self):
+        """
+        Display context-sensitive help based on the currently focused widget.
+        Traverses the widget hierarchy to find the nearest widget with help context.
+        """
+        # Determine the current context and show appropriate help
+        # First check for active popup menus
+        active_popup = QApplication.activePopupWidget()
+        if active_popup:
+            self.logger.debug(f"Active popup: {active_popup.__class__.__name__}")
+
+            # Handle QMenu popups specially
+            if isinstance(active_popup, QMenu):
+                action = active_popup.activeAction()
+                if action and action.property("help_id"):
+                    help_id = action.property("help_id")
+                    self.logger.debug(f"Showing help for menu action: {action.text()}, topic: {help_id}")
+                    self.help_assistant.show_help_topic(help_id)
+                    return
+
+        current_widget = QApplication.focusWidget()
+        if current_widget:
+            property_value, widget_with_help = self.find_help_id_widget(current_widget)
+            if property_value is not None:
+                self.logger.debug(f"help_id for {widget_with_help} is {property_value}")
+                self.help_assistant.show_help_topic(property_value)
+            else:
+                self.logger.error(f"No help_id found in widget hierarchy starting from: {current_widget.__class__.__name__}")
+                # Fall back to general help if no specific help is defined
+                self.help_assistant.show_help_topic("dicom")
+        else:
+            self.logger.debug("No widget currently has focus")
+            self.help_assistant.show_help_topic("dicom")
+
+    def find_help_id_widget(self, widget):
+        """
+        Traverse up the widget hierarchy starting from the given widget
+        until finding a widget with a help_id property.
+
+        Args:
+            widget (QWidget): The starting widget (typically one with focus)
+
+        Returns:
+            tuple: (help_id, widget) if found, (None, None) if not found
+        """
+        current = widget
+        while current is not None:
+            help_id = current.property("help_id")
+            print(f"Checking {current.__class__.__name__} named '{current.objectName()}' - help_id: {help_id}")
+
+            # If we're in a menu or menu bar system
+            if isinstance(current, QMenu) or isinstance(current, QMenuBar):
+                for action in current.actions():
+                    action_help_id = action.property("help_id")
+                    print(f"  Menu action '{action.text()}' - help_id: {action_help_id}")
+                    if action_help_id is not None:
+                        return action_help_id, action
+
+            print(f"Searching for widget with help_id property: looking at {current}")
+            if current.property("help_id") is not None:
+                return current.property("help_id"), current
+            current = current.parent()
+        return None, None
+
+    def closeEvent(self, event):
+        # Clean up the assistant process
+        self.help_assistant.cleanup()
+        # Call the existing closeEvent logic
+        super().closeEvent(event)
 
 
 def main():

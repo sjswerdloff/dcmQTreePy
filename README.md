@@ -4,3 +4,18 @@ A multi-platform DICOM object Editor
 
 An homage to DCMTree from IMPAC &reg;
 
+Installation:
+
+clone
+
+cd dcmQTreePy
+
+(optional) set up a virtual python environment
+
+poetry install
+
+poetry run python dcmqtreepy/dcmQTree.py
+
+or
+
+poetry run streamlit run streamlit_dicom_viewer (if you want a web based editor)

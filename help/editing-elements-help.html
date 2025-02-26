@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dcmQTreePy Help - Editing DICOM Elements</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.5;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h1 {
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            border-bottom: 1px solid #bdc3c7;
+            padding-bottom: 5px;
+            margin-top: 25px;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        code {
+            background-color: #f0f0f0;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: Consolas, monospace;
+        }
+        .note {
+            background-color: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        .warning {
+            background-color: #fff8e6;
+            border-left: 4px solid #f39c12;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        .procedure {
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .procedure ol {
+            padding-left: 25px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <h1 id="editing-elements" data-help-id="editing-elements">Editing DICOM Elements</h1>
+
+    <div class="section" id="viewing-elements" data-help-id="viewing-elements">
+        <h2>Viewing DICOM Elements</h2>
+        <p>The DICOM Elements tree view shows all elements in the currently selected DICOM file. Each element displays:</p>
+
+        <table>
+            <tr>
+                <th>Column</th>
+                <th>Description</th>
+            </tr>
+            <tr>
+                <td>Tag</td>
+                <td>The DICOM tag in the format (GGGG,EEEE) where G is the group and E is the element</td>
+            </tr>
+            <tr>
+                <td>Name</td>
+                <td>The human-readable name of the element</td>
+            </tr>
+            <tr>
+                <td>Value</td>
+                <td>The value of the element (this is the only editable column)</td>
+            </tr>
+            <tr>
+                <td>VR</td>
+                <td>Value Representation - the data type of the element (e.g., CS, DS, SQ)</td>
+            </tr>
+            <tr>
+                <td>Keyword</td>
+                <td>The standardized keyword name for the element</td>
+            </tr>
+        </table>
+
+        <p>Elements are organized hierarchically:</p>
+        <ul>
+            <li>The root item displays the SOP Class name</li>
+            <li>Standard DICOM elements appear at the next level</li>
+            <li>Sequence (SQ) elements can be expanded to show nested datasets</li>
+            <li>Each sequence item is numbered and can be expanded to show its elements</li>
+        </ul>
+    </div>
+
+    <div class="section" id="modifying-values" data-help-id="modifying-values">
+        <h2>Modifying Element Values</h2>
+        <p>You can edit the value of most DICOM elements (except for binary data like OB, OW, etc.):</p>
+
+        <div class="procedure">
+            <h3>Editing a Value</h3>
+            <ol>
+                <li>Locate the element you want to edit in the tree view</li>
+                <li>Double-click on the Value column (the third column) of that element</li>
+                <li>Enter or modify the value</li>
+                <li>Press Enter to confirm or Escape to cancel</li>
+            </ol>
+        </div>
+
+        <div class="note">
+            <p><strong>Note:</strong> The element must exist in the standard DICOM dictionary, or an error will be displayed.</p>
+        </div>
+
+        <p>Added elements will appear in the tree view, sorted by their tag value (in ascending order).</p>
+    </div>
+
+    <div class="section" id="delete-element" data-help-id="delete-element">
+        <h2>Deleting Elements</h2>
+        <p>You can remove elements from a DICOM dataset:</p>
+
+        <div class="procedure">
+            <h3>Deleting an Element</h3>
+            <ol>
+                <li>Select the element you want to delete in the tree view</li>
+                <li>Press the Delete key or select <code>Edit → Delete Element</code> from the menu</li>
+                <li>The element will be removed from the tree</li>
+            </ol>
+        </div>
+
+        <div class="warning">
+            <p><strong>Warning:</strong> When deleting a private creator element (group,10), you must first delete all private elements in that block. The application will prevent you from deleting a private creator with existing elements.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>Note:</strong> Deleting required DICOM elements might cause issues with DICOM compliance. Be cautious when removing elements that are mandatory for the SOP Class.</p>
+        </div>
+    </div>
+
+    <div class="section" id="sequence-elements" data-help-id="sequence-elements">
+        <h2>Working with Sequence Elements</h2>
+        <p>Sequence (SQ) elements contain nested datasets. In dcmQTreePy, they are represented as expandable tree items:</p>
+
+        <h3>Sequence Structure</h3>
+        <ul>
+            <li>A sequence element has the VR of "SQ"</li>
+            <li>Each item in the sequence appears as a child element with a numeric value (1, 2, 3, etc.)</li>
+            <li>Each sequence item can contain its own set of DICOM elements</li>
+        </ul>
+
+        <p>Currently, dcmQTreePy has limited support for modifying sequence structures. You can view and edit values within existing sequences, but creating new sequences or sequence items requires advanced knowledge.</p>
+    </div>
+
+    <footer>
+        <p><a href="index.html">Back to Main Help</a></p>
+    </footer>
+
+        <div class="note">
+            <p><strong>Note:</strong> Changes aren't saved to the DICOM file until you use the Save or Save As function.</p>
+        </div>
+
+        <p>After making changes to element values, the application marks the file as having edits. You'll be prompted to save or discard these changes if you try to switch to another file or close the application.</p>
+
+        <h3>Value Formats</h3>
+        <p>Different VR (Value Representation) types require different formats:</p>
+
+        <table>
+            <tr>
+                <th>VR Type</th>
+                <th>Format</th>
+                <th>Example</th>
+            </tr>
+            <tr>
+                <td>Strings (LO, SH, PN, etc.)</td>
+                <td>Plain text</td>
+                <td>"John Doe"</td>
+            </tr>
+            <tr>
+                <td>Numbers (IS, DS)</td>
+                <td>Numeric value</td>
+                <td>42 or 3.14</td>
+            </tr>
+            <tr>
+                <td>Single-value DateTime (DA, TM)</td>
+                <td>DICOM format</td>
+                <td>20230131 (for Jan 31, 2023)</td>
+            </tr>
+            <tr>
+                <td>Multiple values</td>
+                <td>[value1, value2, ...]</td>
+                <td>[1, 2, 3] or ["value1", "value2"]</td>
+            </tr>
+        </table>
+
+        <div class="warning">
+            <p><strong>Warning:</strong> Entering values with incorrect formats or types may cause errors when saving the file. Ensure your values match the expected VR type.</p>
+        </div>
+    </div>
+
+    <div class="section" id="add-element" data-help-id="add-element">
+        <h2>Adding Public Elements</h2>
+        <p>You can add standard DICOM elements to a dataset:</p>
+        <p>You can add standard DICOM elements to a dataset:</p>
+
+        <div class="procedure">
+            <h3>Adding a Public Element</h3>
+            <ol>
+                <li>Select the parent element where you want to add the new element:
+                    <ul>
+                        <li>Select a dataset or sequence item to add at that level</li>
+                        <li>If adding to the root dataset, select any non-sequence element</li>
+                    </ul>
+                </li>
+                <li>Select <code>Edit → Add Element</code> from the menu</li>
+                <li>In the dialog that appears:
+                    <ul>
+                        <li>Enter the Group in hexadecimal (e.g., "0010" for Patient Group)</li>
+                        <li>Enter the Element in hexadecimal (e.g., "0010" for Patient Name)</li>
+                        <li>The attribute name will be automatically populated if found in the dictionary</li>
+                        <li>Enter the value in the text area (for multi-valued elements, enter each value on a new line)</li>
+                    </ul>
+                </li>
+                <li>Click OK to add the element</li>

@@ -1,0 +1,12 @@
+dcmQTreePy - DICOM Object Editor
+Version 0.2.0
+
+A multi-platform DICOM object editor
+An homage to DCMTree from IMPAC®
+
+Created by Stuart Swerdloff <sjswerdloff@gmail.com>
+
+dcmQTreePy is a PySide6 and pydicom based application for viewing and editing DICOM objects.
+It provides a hierarchical view of DICOM elements and supports both standard and private elements.
+
+Licensed under Apache 2.0 License
