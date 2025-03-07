@@ -6,7 +6,11 @@ An homage to DCMTree from IMPAC &reg;
 
 Installation:
 
-git clone <repository_url>
+git clone https://github.com/sjswerdloff/dcmQTreePy.git
+
+or
+
+git clone git://github.com/sjswerdloff/dcmQTreePy.git
 
 cd dcmQTreePy
 
