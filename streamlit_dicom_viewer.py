@@ -424,9 +424,9 @@ def main():
         selected_file = st.selectbox("Select file to view", st.session_state["loaded_files"])
 
         if selected_file:
-            if get_state("modified", "", False):
-                if not st.warning("You have unsaved changes. Do you want to continue?"):
-                    return
+            if get_state("modified", "", False) and not st.warning("You have unsaved changes. Do you want to continue?"):
+                return
+
 
             try:
                 dataset = pydicom.dcmread(selected_file, force=True)
