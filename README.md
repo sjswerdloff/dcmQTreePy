@@ -10,7 +10,7 @@ git clone https://github.com/sjswerdloff/dcmQTreePy.git
 
 or
 
-git clone git://github.com/sjswerdloff/dcmQTreePy.git
+git clone git@github.com:sjswerdloff/dcmQTreePy.git
 
 cd dcmQTreePy
 
