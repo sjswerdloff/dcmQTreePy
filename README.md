@@ -14,7 +14,7 @@ git clone git@github.com:sjswerdloff/dcmQTreePy.git
 
 cd dcmQTreePy
 
-(optional) set up a virtual python environment (e.g., using Python’s built-in venv or conda)
+(optional) set up a virtual python environment (e.g., using Python’s built-in venv or pyenv or conda.  I use pyenv)
 
 poetry install
 
