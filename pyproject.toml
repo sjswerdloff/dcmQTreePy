@@ -1,17 +1,18 @@
 [tool.poetry]
 name = "dcmqtreepy"
-version = "0.2.0"
+version = "0.3.0"
 description = "A PySide6 and pydicom based DICOM object editor"
 authors = ["Stuart Swerdloff <sjswerdloff@gmail.com>"]
 license = "Apache2"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.11"
+python = ">=3.10,<3.13"
 PySide6 = "^6.7.2"
 pydicom = "^2.4.4"
 pynetdicom = "^2.1.0"
 tomli = "^2.0.1"
+streamlit = "^1.42.2"
 
 [tool.poetry.group.dev.dependencies]
 isort = "^5.13.2"

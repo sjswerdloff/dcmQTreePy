@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dcmQTreePy Help - File Operations</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.5;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h1 {
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            border-bottom: 1px solid #bdc3c7;
+            padding-bottom: 5px;
+            margin-top: 25px;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        code {
+            background-color: #f0f0f0;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: Consolas, monospace;
+        }
+        .note {
+            background-color: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        .warning {
+            background-color: #fff8e6;
+            border-left: 4px solid #f39c12;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        .procedure {
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .procedure ol {
+            padding-left: 25px;
+        }
+    </style>
+</head>
+<body>
+    <h1 id="file-operations" data-help-id="file-operations">File Operations</h1>
+
+    <div class="section" id="open-file" data-help-id="open-file">
+        <h2>Opening DICOM Files</h2>
+        <p>dcmQTreePy supports multiple ways to open DICOM files:</p>
+
+        <div class="procedure">
+            <h3>Using the Open Menu</h3>
+            <ol>
+                <li>Click on <code>File → Open</code> in the menu bar</li>
+                <li>Navigate to the location of your DICOM file(s)</li>
+                <li>Select the DICOM file (usually with a .dcm extension)</li>
+                <li>Click "Open"</li>
+            </ol>
+        </div>
+
+        <div class="procedure">
+            <h3>Using Drag and Drop</h3>
+            <ol>
+                <li>Navigate to the DICOM files in your file explorer</li>
+                <li>Select one or more DICOM files</li>
+                <li>Drag the selected files into the dcmQTreePy application window (specifically into the Files section)</li>
+                <li>Release to drop the files</li>
+            </ol>
+        </div>
+
+        <div class="note">
+            <p><strong>Note:</strong> dcmQTreePy uses the "force" option when reading DICOM files, which allows it to open files that might not strictly conform to the DICOM standard.</p>
+        </div>
+    </div>
+
+    <div class="section" id="save-file" data-help-id="save-file">
+        <h2>Saving DICOM Files</h2>
+        <p>After viewing or editing a DICOM file, you can save your changes:</p>
+
+        <div class="procedure">
+            <h3>Saving to the Original File</h3>
+            <ol>
+                <li>Ensure the file you want to save is selected in the file list</li>
+                <li>Click on <code>File → Save</code> in the menu bar</li>
+                <li>The file will be overwritten with your changes</li>
+            </ol>
+        </div>
+
+        <div class="procedure">
+            <h3>Saving to a New File</h3>
+            <ol>
+                <li>Ensure the file you want to save is selected in the file list</li>
+                <li>Click on <code>File → Save As...</code> in the menu bar</li>
+                <li>Navigate to the location where you want to save the file</li>
+                <li>Enter a filename (ensure it has a .dcm extension)</li>
+                <li>Click "Save"</li>
+            </ol>
+        </div>
+
+        <div class="warning">
+            <p><strong>Warning:</strong> When saving files, dcmQTreePy uses explicit VR (Value Representation) and sets the transfer syntax to "1.2.840.10008.1.2.1" (Explicit VR Little Endian). This may change the format of the original file but should maintain compatibility with DICOM readers.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>Note:</strong> Pixel data (if present) is preserved during save operations.</p>
+        </div>
+    </div>
+
+    <div class="section" id="manage-files" data-help-id="manage-files">
+        <h2>Managing Open Files</h2>
+        <p>dcmQTreePy allows you to work with multiple files at once:</p>
+
+        <div class="procedure">
+            <h3>Switching Between Files</h3>
+            <ol>
+                <li>Click on a file in the Files list to select it</li>
+                <li>The DICOM elements of the selected file will be displayed in the tree view below</li>
+                <li>If you have unsaved changes in the current file, you'll be prompted to confirm before switching</li>
+            </ol>
+        </div>
+
+        <div class="procedure">
+            <h3>Removing Files from the List</h3>
+            <ol>
+                <li>Select the file you want to remove in the Files list</li>
+                <li>Press the Delete key or select <code>File → Delete</code> from the menu</li>
+                <li>If you have unsaved changes, you'll be prompted to confirm</li>
+            </ol>
+            <p><strong>Note:</strong> This only removes the file from the application's list; it does not delete the file from disk.</p>
+        </div>
+    </div>
+
+    <div class="section" id="file-warnings" data-help-id="file-warnings">
+        <h2>Handling Warnings and Errors</h2>
+
+        <h3>Unsaved Changes Warning</h3>
+        <p>When you try to switch to a different file or close a file with unsaved changes, you'll see a warning dialog:</p>
+        <ul>
+            <li>Click "OK" to continue and discard changes</li>
+            <li>Click "Cancel" to return to the current file and preserve your changes</li>
+        </ul>
+
+        <h3>File Format Issues</h3>
+        <p>If you encounter issues with a DICOM file:</p>
+        <ul>
+            <li>Check the file extension (.dcm is standard but not required)</li>
+            <li>Ensure the file is a valid DICOM file</li>
+            <li>Try using the "force" option with other DICOM tools to verify the file integrity</li>
+        </ul>
+    </div>
+
+    <footer>
+        <p><a href="index.html">Back to Main Help</a></p>
+    </footer>
+</body>
+</html>
