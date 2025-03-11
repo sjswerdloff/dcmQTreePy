@@ -54,14 +54,21 @@ def test_impac_tag_format():
         assert 0x01 <= private_element <= 0xFF, f"Tag {hex(tag)} has unusual private element {private_element:02X}"
 
 
-def test_specific_impac_entries(valid_vrs):
+@pytest.mark.parametrize(
+    "tag, expected_attributes",
+    [
+        (0x300B1001, ("FL", "1", "Distal Target Distance Tolerance", "")),
+        (0x300B1002, ("FL", "1", "Maximum Collimated Field Diameter", "")),
+        (0x300B1003, ("CS", "1", "Beam Check Flag", "")),
+    ],
+)
+def test_specific_impac_entries_parameterized(tag, expected_attributes):
     """Test specific entries in the IMPAC dictionary to ensure data integrity."""
-    # Test a few known entries
-    assert impac_private_dict[0x300B1001] == ("FL", "1", "Distal Target Distance Tolerance", "")
-    assert impac_private_dict[0x300B1002] == ("FL", "1", "Maximum Collimated Field Diameter", "")
-    assert impac_private_dict[0x300B1003] == ("CS", "1", "Beam Check Flag", "")
+    assert impac_private_dict[tag] == expected_attributes
 
-    # Check that VRs are valid DICOM Value Representations
+
+def test_impac_entries_vr_validity(valid_vrs):
+    """Check that all VRs in the IMPAC dictionary are valid DICOM Value Representations."""
     for tag, attributes in impac_private_dict.items():
         vr = attributes[0]
         assert vr in valid_vrs, f"VR '{vr}' for tag {hex(tag)} is not a valid DICOM VR"

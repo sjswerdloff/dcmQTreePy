@@ -51,27 +51,20 @@ def test_tag_format(assert_valid_tag_format):
             assert_valid_tag_format(tag, vendor=vendor)
 
 
-def test_specific_vendor_entries():
+@pytest.mark.parametrize(
+    "vendor, tag, expected_vr, expected_name",
+    [
+        ("Accuray Robotic Control", 0x300F1001, "CS", "Use Increased Pitch Correction"),
+        ("IMPAC", 0x300B1001, "FL", "Distal Target Distance Tolerance"),
+        ("Philips PET Private Group", 0x70531000, "DS", "Philips SUV Scale Factor"),
+        ("RAYSEARCHLABS 2.0", 0x40011001, "DT", "Treatment Machine CommissionTime"),
+    ],
+)
+def test_specific_vendor_entries(vendor, tag, expected_vr, expected_name):
     """Test specific entries for each vendor to ensure data integrity."""
-    # Test Accuray
-    assert 0x300F1001 in new_private_dictionaries["Accuray Robotic Control"]
-    assert new_private_dictionaries["Accuray Robotic Control"][0x300F1001][0] == "CS"  # VR
-    assert new_private_dictionaries["Accuray Robotic Control"][0x300F1001][2] == "Use Increased Pitch Correction"  # Name
-
-    # Test IMPAC
-    assert 0x300B1001 in new_private_dictionaries["IMPAC"]
-    assert new_private_dictionaries["IMPAC"][0x300B1001][0] == "FL"  # VR
-    assert new_private_dictionaries["IMPAC"][0x300B1001][2] == "Distal Target Distance Tolerance"  # Name
-
-    # Test Philips
-    assert 0x70531000 in new_private_dictionaries["Philips PET Private Group"]
-    assert new_private_dictionaries["Philips PET Private Group"][0x70531000][0] == "DS"  # VR
-    assert new_private_dictionaries["Philips PET Private Group"][0x70531000][2] == "Philips SUV Scale Factor"  # Name
-
-    # Test RAYSEARCHLABS
-    assert 0x40011001 in new_private_dictionaries["RAYSEARCHLABS 2.0"]
-    assert new_private_dictionaries["RAYSEARCHLABS 2.0"][0x40011001][0] == "DT"  # VR
-    assert new_private_dictionaries["RAYSEARCHLABS 2.0"][0x40011001][2] == "Treatment Machine CommissionTime"  # Name
+    assert tag in new_private_dictionaries[vendor]
+    assert new_private_dictionaries[vendor][tag][0] == expected_vr  # VR
+    assert new_private_dictionaries[vendor][tag][2] == expected_name  # Name
 
 
 def test_value_multiplicity_format(valid_vm_patterns, assert_valid_vm_format):
