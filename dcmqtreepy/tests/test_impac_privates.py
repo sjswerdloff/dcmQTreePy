@@ -1,8 +1,6 @@
 """Unit tests for impac_privates.py"""
 
 
-import re
-
 from dcmqtreepy.impac_privates import impac_private_dict
 
 
@@ -25,18 +23,11 @@ def test_impac_dict_keys():
         assert isinstance(tag, int), f"Tag {tag} is not an integer"
 
 
-def test_impac_dict_values():
+def test_impac_dict_values(assert_valid_dict_attributes):
     """Test the values in the IMPAC dictionary."""
-    # Each entry should be a tuple of (VR, VM, name, retired flag)
+    # Use the fixture to validate dict attributes
     for tag, attributes in impac_private_dict.items():
-        assert isinstance(attributes, tuple), f"Attributes for tag {tag} is not a tuple"
-        assert len(attributes) == 4, f"Attributes for tag {tag} doesn't have 4 elements"
-
-        vr, vm, name, retired = attributes
-        assert isinstance(vr, str), f"VR for tag {tag} is not a string"
-        assert isinstance(vm, str), f"VM for tag {tag} is not a string"
-        assert isinstance(name, str), f"Name for tag {tag} is not a string"
-        assert isinstance(retired, str), f"Retired flag for tag {tag} is not a string"
+        assert_valid_dict_attributes(tag, attributes, vendor="IMPAC")
 
 
 def test_impac_tag_format():
@@ -62,7 +53,7 @@ def test_impac_tag_format():
         assert 0x01 <= private_element <= 0xFF, f"Tag {hex(tag)} has unusual private element {private_element:02X}"
 
 
-def test_specific_impac_entries():
+def test_specific_impac_entries(valid_vrs):
     """Test specific entries in the IMPAC dictionary to ensure data integrity."""
     # Test a few known entries
     assert impac_private_dict[0x300B1001] == ("FL", "1", "Distal Target Distance Tolerance", "")
@@ -70,55 +61,13 @@ def test_specific_impac_entries():
     assert impac_private_dict[0x300B1003] == ("CS", "1", "Beam Check Flag", "")
 
     # Check that VRs are valid DICOM Value Representations
-    valid_vrs = {
-        "AE",
-        "AS",
-        "AT",
-        "CS",
-        "DA",
-        "DS",
-        "DT",
-        "FL",
-        "FD",
-        "IS",
-        "LO",
-        "LT",
-        "OB",
-        "OD",
-        "OF",
-        "OW",
-        "PN",
-        "SH",
-        "SL",
-        "SQ",
-        "SS",
-        "ST",
-        "TM",
-        "UI",
-        "UL",
-        "UN",
-        "US",
-        "UT",
-    }
-
     for tag, attributes in impac_private_dict.items():
         vr = attributes[0]
         assert vr in valid_vrs, f"VR '{vr}' for tag {hex(tag)} is not a valid DICOM VR"
 
 
-def test_value_multiplicity_format():
+def test_value_multiplicity_format(valid_vm_patterns, assert_valid_vm_format):
     """Test that VM (Value Multiplicity) entries are correctly formatted."""
-    valid_vm_patterns = [
-        r"^\d+$",  # Single number like "1"
-        r"^\d+-\d+$",  # Range like "1-3"
-        r"^\d+-n$",  # Range to infinity like "1-n"
-        r"^\d+-\d+n$",  # Range to multiple of infinity like "2-2n"
-    ]
-
     for tag, attributes in impac_private_dict.items():
         vm = attributes[1]
-
-        # Check if VM matches any of the valid patterns
-        valid_format = any(re.match(pattern, vm) for pattern in valid_vm_patterns)
-
-        assert valid_format, f"VM '{vm}' for tag {hex(tag)} has invalid format"
+        assert_valid_vm_format(tag, vm, vendor="IMPAC", patterns=valid_vm_patterns)

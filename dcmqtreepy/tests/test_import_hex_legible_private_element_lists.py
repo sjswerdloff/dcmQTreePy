@@ -1,8 +1,6 @@
 """Unit tests for import_hex_legible_private_element_lists.py"""
 
 import json
-import os
-import tempfile
 
 import pytest
 
@@ -14,35 +12,6 @@ from dcmqtreepy.import_hex_legible_private_element_lists import (
     pydicom_private_dicts_from_json,
     wrap_in_single_quotes,
 )
-
-
-@pytest.fixture
-def sample_json_file():
-    """Create a temporary JSON file with sample private dictionary data."""
-    sample_data = [
-        {
-            "Test Creator": {
-                "0x300B0001": ["CS", "1", "Test Element", ""],
-                "0x300B0002": ["DS", "2", "Test Element 2", ""],
-            }
-        },
-        {
-            "Invalid Creator": {
-                "0x30000001": ["CS", "1", "Invalid Element", ""],
-            }
-        },
-        {"Empty Creator": {}},
-    ]
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as temp_file:
-        json.dump(sample_data, temp_file)
-        temp_path = temp_file.name
-
-    yield temp_path
-
-    # Cleanup after tests
-    if os.path.exists(temp_path):
-        os.remove(temp_path)
 
 
 def test_wrap_in_single_quotes():
@@ -89,7 +58,7 @@ def test_internal_pydicom_private_dicts_from_json(sample_json_file):
     assert 0x300B0002 in test_dict
 
 
-def test_filter_creators():
+def test_filter_creators(sample_private_dict_data):
     """Test the _filter_creators function."""
     unfiltered_dict = {
         "Valid Creator": {
@@ -151,7 +120,7 @@ def test_generate_python_code_for_pydicom_pr():
     assert "'300Bxx01'" in python_code
 
 
-def test_jsonify_pydicom_private_dict_list():
+def test_jsonify_pydicom_private_dict_list(sample_private_dict_data):
     """Test converting Python dictionaries to JSON format."""
     private_dict_list = [
         {
