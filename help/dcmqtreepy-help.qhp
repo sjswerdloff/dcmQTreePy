@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<QtHelpProject version="1.0">
+    <namespace>org.dcmqtreepy.1.0</namespace>
+    <virtualFolder>doc</virtualFolder>
+    <filterSection>
+        <toc>
+            <section title="dcmQTreePy Help" ref="index.html">
+                <section title="Introduction" ref="index.html#introduction"/>
+                <section title="Getting Started" ref="index.html#getting-started"/>
+                <section title="User Interface" ref="interface-help.html">
+                    <section title="Main Window Layout" ref="interface-help.html#main-window"/>
+                    <section title="Menu Bar" ref="interface-help.html#menu-bar"/>
+                    <section title="File List" ref="interface-help.html#file-list"/>
+                    <section title="Element Tree" ref="interface-help.html#element-tree"/>
+                    <section title="Dialog Windows" ref="interface-help.html#dialogs"/>
+                </section>
+                <section title="File Operations" ref="file-operations-help.html">
+                    <section title="Opening DICOM Files" ref="file-operations-help.html#open-file"/>
+                    <section title="Saving DICOM Files" ref="file-operations-help.html#save-file"/>
+                    <section title="Managing Open Files" ref="file-operations-help.html#manage-files"/>
+                    <section title="Handling Warnings and Errors" ref="file-operations-help.html#file-warnings"/>
+                </section>
+                <section title="Editing DICOM Elements" ref="editing-elements-help.html">
+                    <section title="Viewing DICOM Elements" ref="editing-elements-help.html#viewing-elements"/>
+                    <section title="Modifying Element Values" ref="editing-elements-help.html#modifying-values"/>
+                    <section title="Adding Public Elements" ref="editing-elements-help.html#add-element"/>
+                    <section title="Deleting Elements" ref="editing-elements-help.html#delete-element"/>
+                    <section title="Working with Sequence Elements" ref="editing-elements-help.html#sequence-elements"/>
+                </section>
+                <section title="Working with Private Elements" ref="private-elements-help.html">
+                    <section title="Understanding Private Elements" ref="private-elements-help.html#private-overview"/>
+                    <section title="Viewing Private Elements" ref="private-elements-help.html#view-private"/>
+                    <section title="Adding Private Elements" ref="private-elements-help.html#add-private"/>
+                    <section title="Editing Private Elements" ref="private-elements-help.html#edit-private"/>
+                    <section title="Deleting Private Elements" ref="private-elements-help.html#delete-private"/>
+                    <section title="Supported Private Dictionaries" ref="private-elements-help.html#supported-dictionaries"/>
+                </section>
+                <section title="Keyboard Shortcuts" ref="index.html#keyboard-shortcuts"/>
+                <section title="Troubleshooting" ref="index.html#troubleshooting"/>
+            </section>
+        </toc>
+
+        <keywords>
+            <!-- Main concepts -->
+            <keyword name="DICOM" id="dicom" ref="index.html"/>
+            <keyword name="File Operations" id="file_operations" ref="file-operations-help.html"/>
+            <keyword name="DICOM Elements" id="dicom_elements" ref="editing-elements-help.html"/>
+            <keyword name="Private Elements" id="private_elements" ref="private-elements-help.html"/>
+            <keyword name="Keyboard Shortcuts" id="keyboard_shortcuts" ref="index.html#keyboard-shortcuts"/>
+
+            <!-- Interface -->
+            <keyword name="User Interface" id="interface" ref="interface-help.html"/>
+            <keyword name="Menu Bar" id="menu_bar" ref="interface-help.html#menu-bar"/>
+            <keyword name="File List" id="file_list" ref="interface-help.html#file-list"/>
+            <keyword name="Element Tree" id="element_tree" ref="interface-help.html#element-tree"/>
+            <keyword name="Dialogs" id="dialogs" ref="interface-help.html#dialogs"/>
+
+            <!-- File Operations -->
+
+            <keyword name="Open File" id="open_file" ref="file-operations-help.html#open-file"/>
+            <keyword name="Save File" id="save_file" ref="file-operations-help.html#save-file"/>
+            <keyword name="Drag and Drop" id="drag_drop" ref="file-operations-help.html#open-file"/>
+
+            <!-- Editing -->
+            <keyword name="Edit Element" id="edit_element" ref="editing-elements-help.html#modifying-values"/>
+            <keyword name="Add Element" id="add_element" ref="editing-elements-help.html#add-element"/>
+            <keyword name="Delete Element" id="delete_element" ref="editing-elements-help.html#delete-element"/>
+            <keyword name="Sequence Elements" id="sequence_elements" ref="editing-elements-help.html#sequence-elements"/>
+
+            <!-- Private Elements -->
+            <keyword name="Add Private Element" id="add_private" ref="private-elements-help.html#add-private"/>
+            <keyword name="Private Dictionary" id="private_dict" ref="private-elements-help.html#supported-dictionaries"/>
+            <keyword name="Private Creator" id="private_creator" ref="private-elements-help.html#private-overview"/>
+
+            <!-- Troubleshooting -->
+            <keyword name="Errors" id="errors" ref="index.html#troubleshooting"/>
+            <keyword name="Warnings" id="warnings" ref="file-operations-help.html#file-warnings"/>
+
+            <!-- Context Help IDs -->
+            <keyword name="mainwindow" id="mainwindow" ref="interface-help.html#main-window"/>
+            <keyword name="open_file" id="open_file" ref="file-operations-help.html#open-file"/>
+            <keyword name="save_file" id="save_file" ref="file-operations-help.html#save-file"/>
+            <keyword name="save_as_file" id="save_as_file" ref="file-operations-help.html#save-file"/>
+            <keyword name="add_element" id="add_element" ref="editing-elements-help.html#add-element"/>
+            <keyword name="delete_element" id="delete_element" ref="editing-elements-help.html#delete-element"/>
+            <keyword name="add_private_element" id="add_private_element" ref="private-elements-help.html#add-private"/>
+            <keyword name="private_dictionaries" id="private_dictionaries" ref="private-elements-help.html#supported-dictionaries"/>
+        </keywords>
+
+        <files>
+            <file>index.html</file>
+            <file>interface-help.html</file>
+            <file>file-operations-help.html</file>
+            <file>editing-elements-help.html</file>
+            <file>private-elements-help.html</file>
+            <!-- Add CSS and image files here if included -->
+        </files>
+    </filterSection>
+</QtHelpProject>

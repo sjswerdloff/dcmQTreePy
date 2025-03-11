@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<QHelpCollectionProject version="1.0">
+    <assistant>
+        <title>dcmQTreePy Help</title>
+        <applicationIcon>icons/app_icon.png</applicationIcon>
+        <cacheDirectory>Stuart Swerdloff/dcmQTreePy</cacheDirectory>
+        <startPage>qthelp://org.dcmqtreepy.1.0/doc/index.html</startPage>
+        <enableFilterFunctionality>false</enableFilterFunctionality>
+        <enableDocumentationManager>false</enableDocumentationManager>
+        <enableAddressBar visible="false">false</enableAddressBar>
+        <aboutMenuText>
+            <text>About dcmQTreePy</text>
+        </aboutMenuText>
+        <aboutDialog>
+            <file>about.txt</file>
+            <icon>icons/app_icon.png</icon>
+        </aboutDialog>
+    </assistant>
+    <docFiles>
+        <generate>
+            <file>
+                <input>dcmqtreepy-help.qhp</input>
+                <output>dcmqtreepy-help.qch</output>
+            </file>
+        </generate>
+        <register>
+            <file>dcmqtreepy-help.qch</file>
+        </register>
+    </docFiles>
+</QHelpCollectionProject>

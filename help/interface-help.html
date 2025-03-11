@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dcmQTreePy Help - User Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.5;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h1 {
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            border-bottom: 1px solid #bdc3c7;
+            padding-bottom: 5px;
+            margin-top: 25px;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        code {
+            background-color: #f0f0f0;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: Consolas, monospace;
+        }
+        .note {
+            background-color: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        .key {
+            display: inline-block;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            padding: 2px 5px;
+            font-family: Consolas, monospace;
+            font-size: 0.9em;
+            box-shadow: 0 1px 0 rgba(0,0,0,0.2);
+        }
+        .menu-path {
+            background-color: #f0f0f0;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: Consolas, monospace;
+        }
+        .ui-element {
+            font-weight: bold;
+            color: #2980b9;
+        }
+        .image-container {
+            text-align: center;
+            margin: 20px 0;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .image-container img {
+            max-width: 100%;
+            height: auto;
+        }
+        .image-caption {
+            margin-top: 10px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <h1 id="interface" data-help-id="interface">User Interface</h1>
+
+    <div class="section" id="main-window" data-help-id="main-window">
+        <h2>Main Window Layout</h2>
+        <p>The dcmQTreePy main window is divided into several sections:</p>
+
+        <div class="image-container">
+            <!-- Placeholder for a UI screenshot that would be added later -->
+            <div class="image-caption">dcmQTreePy Main Window</div>
+        </div>
+
+        <h3>Components</h3>
+        <ul>
+            <li><span class="ui-element">Menu Bar</span> - Contains File and Edit menus with application commands</li>
+            <li><span class="ui-element">Files Section</span> - Lists all open DICOM files</li>
+            <li><span class="ui-element">DICOM Elements Section</span> - Displays the element tree for the currently selected file</li>
+            <li><span class="ui-element">Status Bar</span> - Shows application status messages</li>
+        </ul>
+
+        <h3>Files Section</h3>
+        <p>The Files section displays a list of all DICOM files currently open in the application. Each file is shown with its full path. This section allows you to:</p>
+        <ul>
+            <li>Click on a file to select and view its DICOM elements</li>
+            <li>Select a file and press <span class="key">Delete</span> to remove it from the list</li>
+            <li>Drag and drop files from your file explorer to add them to the list</li>
+        </ul>
+
+        <h3>DICOM Elements Section</h3>
+        <p>The DICOM Elements section displays a hierarchical tree view of all elements in the selected DICOM file with the following columns:</p>
+        <ul>
+            <li><span class="ui-element">Tag</span> - The DICOM tag in format (GGGG,EEEE)</li>
+            <li><span class="ui-element">Name</span> - The name of the DICOM element</li>
+            <li><span class="ui-element">Value</span> - The element's value (editable by double-clicking)</li>
+            <li><span class="ui-element">VR</span> - Value Representation (data type)</li>
+            <li><span class="ui-element">Keyword</span> - The standardized keyword for the element</li>
+        </ul>
+    </div>
+
+    <div class="section" id="menu-bar" data-help-id="menu-bar">
+        <h2>Menu Bar</h2>
+        <p>The menu bar provides access to all of dcmQTreePy's commands and features:</p>
+
+        <h3>File Menu</h3>
+        <ul>
+            <li><span class="menu-path">Open</span> - Opens a file selection dialog to load a DICOM file</li>
+            <li><span class="menu-path">Save</span> - Saves changes to the current DICOM file</li>
+            <li><span class="menu-path">Save As...</span> - Saves the current DICOM file to a new location</li>
+            <li><span class="menu-path">Delete</span> - Removes the selected file from the file list</li>
+        </ul>
+
+        <h3>Edit Menu</h3>
+        <ul>
+            <li><span class="menu-path">Add Element</span> - Opens a dialog to add a standard DICOM element</li>
+            <li><span class="menu-path">Add Private Element</span> - Opens a dialog to add a private DICOM element</li>
+            <li><span class="menu-path">Delete Element</span> - Removes the selected element from the DICOM dataset</li>
+        </ul>
+    </div>
+
+    <div class="section" id="file-list" data-help-id="file-list">
+        <h2>Working with the File List</h2>
+        <p>The File List allows you to work with multiple DICOM files simultaneously:</p>
+
+        <h3>File Selection</h3>
+        <p>To select a file for viewing and editing:</p>
+        <ol>
+            <li>Click on the file in the list</li>
+            <li>The DICOM elements for that file will load in the tree view below</li>
+        </ol>
+
+        <div class="note">
+            <p><strong>Note:</strong> If you have unsaved changes in the current file, you'll be prompted to confirm before switching to another file.</p>
+        </div>
+
+        <h3>File Management</h3>
+        <p>To remove a file from the list:</p>
+        <ol>
+            <li>Select the file in the list</li>
+            <li>Press <span class="key">Delete</span> key or select <span class="menu-path">File → Delete</span></li>
+        </ol>
+
+        <p>To add files to the list:</p>
+        <ul>
+            <li>Use <span class="menu-path">File → Open</span> to add a file through the file dialog</li>
+            <li>Drag and drop files from your file explorer directly into the file list area</li>
+        </ul>
+    </div>
+
+    <div class="section" id="element-tree" data-help-id="element-tree">
+        <h2>Working with the Element Tree</h2>
+        <p>The Element Tree displays the DICOM elements in a hierarchical structure:</p>
+
+        <h3>Tree Navigation</h3>
+        <ul>
+            <li>Click on the expander icons (▶/▼) to expand or collapse elements with children</li>
+            <li>Sequence (SQ) elements can be expanded to show their items</li>
+            <li>Sequence items can be further expanded to show their elements</li>
+        </ul>
+
+        <h3>Element Selection</h3>
+        <p>To select an element:</p>
+        <ol>
+            <li>Click on the element in the tree</li>
+            <li>The selected element can then be edited or deleted</li>
+        </ol>
+
+        <h3>Element Editing</h3>
+        <p>To edit an element value:</p>
+        <ol>
+            <li>Double-click on the Value column (third column) of the element</li>
+            <li>Enter or modify the value</li>
+            <li>Press <span class="key">Enter</span> to confirm or <span class="key">Esc</span> to cancel</li>
+        </ol>
+
+        <div class="note">
+            <p><strong>Note:</strong> Only the Value column is editable. Other columns (Tag, Name, VR, Keyword) cannot be modified directly.</p>
+        </div>
+    </div>
+
+    <div class="section" id="dialogs" data-help-id="dialogs">
+        <h2>Dialog Windows</h2>
+        <p>dcmQTreePy uses several dialog windows for specific functions:</p>
+
+        <h3>Add Element Dialog</h3>
+        <p>This dialog appears when selecting <span class="menu-path">Edit → Add Element</span>:</p>
+        <ul>
+            <li><span class="ui-element">Group</span> - Hexadecimal value for the DICOM group (e.g., "0010")</li>
+            <li><span class="ui-element">Element</span> - Hexadecimal value for the DICOM element (e.g., "0010")</li>
+            <li><span class="ui-element">Name</span> - Auto-populated field showing the element name (read-only)</li>
+            <li><span class="ui-element">Value</span> - Text area for entering the element value(s)</li>
+        </ul>
+
+        <h3>Add Private Element Dialog</h3>
+        <p>This dialog appears when selecting <span class="menu-path">Edit → Add Private Element</span>:</p>
+        <ul>
+            <li><span class="ui-element">Creator</span> - Dropdown to select the Private Creator</li>
+            <li><span class="ui-element">Group</span> - Hexadecimal value for the private group (must be odd)</li>
+            <li><span class="ui-element">Byte</span> - Hexadecimal value for the element byte offset</li>
+            <li><span class="ui-element">Name</span> - Auto-populated field showing the element name (read-only)</li>
+            <li><span class="ui-element">Value</span> - Text area for entering the element value(s)</li>
+        </ul>
+
+        <h3>Warning Dialogs</h3>
+        <p>Various warning dialogs will appear in scenarios like:</p>
+        <ul>
+            <li>Switching files when there are unsaved changes</li>
+            <li>Attempting to delete a private creator that has associated private elements</li>
+            <li>Entering invalid values for elements</li>
+        </ul>
+    </div>
+
+    <footer>
+        <p><a href="index.html">Back to Main Help</a></p>
+    </footer>
+</body>
+</html>

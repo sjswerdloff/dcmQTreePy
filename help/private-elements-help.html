@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dcmQTreePy Help - Working with Private Elements</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.5;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h1 {
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            border-bottom: 1px solid #bdc3c7;
+            padding-bottom: 5px;
+            margin-top: 25px;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        code {
+            background-color: #f0f0f0;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: Consolas, monospace;
+        }
+        .note {
+            background-color: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        .warning {
+            background-color: #fff8e6;
+            border-left: 4px solid #f39c12;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        .info {
+            background-color: #eafaf1;
+            border-left: 4px solid #2ecc71;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        .procedure {
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .procedure ol {
+            padding-left: 25px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <h1 id="private-elements" data-help-id="private-elements">Working with Private Elements</h1>
+
+    <div class="section" id="private-overview" data-help-id="private-overview">
+        <h2>Understanding Private Elements</h2>
+        <p>Private data elements in DICOM are elements with odd group numbers reserved for proprietary use by vendors, research institutions, and organizations to store custom information.</p>
+
+        <h3>Private Elements Structure</h3>
+        <p>Private elements are organized into blocks:</p>
+        <ul>
+            <li>Each private group (odd number) contains blocks identified by the upper byte of the element number</li>
+            <li>Element (xxxx,00xx) through (xxxx,FFxx) can be used for private elements</li>
+            <li>The range (xxxx,0010) through (xxxx,00FF) is reserved for private creator elements that identify the owner of a block</li>
+        </ul>
+
+        <div class="info">
+            <p><strong>Private Creator Elements:</strong> Before using private elements, a "Private Creator" (PC) element must exist in the dataset. This is a string value (typically a company or product name) that identifies the owner of the private elements.</p>
+        </div>
+
+        <p>Example of private elements structure:</p>
+        <ul>
+            <li>(0009,0010) - Private Creator: "ACME_CORP"</li>
+            <li>(0009,1001) - Custom element in the private block identified by ACME_CORP</li>
+            <li>(0009,1002) - Another custom element in the same block</li>
+        </ul>
+    </div>
+
+    <div class="section" id="view-private" data-help-id="view-private">
+        <h2>Viewing Private Elements</h2>
+        <p>When you open a DICOM file in dcmQTreePy, any private elements present in the file will be displayed in the tree view like standard elements. The application attempts to interpret private elements based on its internal private dictionaries.</p>
+
+        <h3>Private Element Display</h3>
+        <p>Private elements appear with:</p>
+        <ul>
+            <li>Tag - The full DICOM tag (odd group number)</li>
+            <li>Name - If recognized in one of the loaded private dictionaries, otherwise generic "Private Tag"</li>
+            <li>Value - The element's value</li>
+            <li>VR - Value Representation (data type)</li>
+            <li>Keyword - Usually empty for private elements</li>
+        </ul>
+
+        <div class="note">
+            <p><strong>Note:</strong> Private elements can only be interpreted correctly if dcmQTreePy has the corresponding private dictionary loaded.</p>
+        </div>
+    </div>
+
+    <div class="section" id="add-private" data-help-id="add-private">
+        <h2>Adding Private Elements</h2>
+        <p>dcmQTreePy allows you to add private elements from supported private dictionaries:</p>
+
+        <div class="procedure">
+            <h3>Adding a Private Element</h3>
+            <ol>
+                <li>Select the parent element where you want to add the private element</li>
+                <li>Select <code>Edit → Add Private Element</code> from the menu</li>
+                <li>In the dialog that appears:
+                    <ul>
+                        <li>Select a Private Creator from the dropdown list</li>
+                        <li>Enter the Group number (must be odd) in hexadecimal format</li>
+                        <li>Enter the Element (Byte) number in hexadecimal format</li>
+                        <li>The attribute name will be automatically populated if found in the private dictionary</li>
+                        <li>Enter the value in the text area (for multi-valued elements, enter each value on a new line)</li>
+                    </ul>
+                </li>
+                <li>Click OK to add the element</li>
+            </ol>
+        </div>
+
+        <div class="note">
+            <p><strong>Note:</strong> When adding a private element, dcmQTreePy will automatically add the corresponding Private Creator element if it doesn't already exist in the dataset.</p>
+        </div>
+
+        <div class="warning">
+            <p><strong>Warning:</strong> Private elements must be defined in one of the supported private dictionaries to be added through the dialog.</p>
+        </div>
+    </div>
+
+    <div class="section" id="edit-private" data-help-id="edit-private">
+        <h2>Editing Private Elements</h2>
+        <p>You can edit private elements in the same way as standard DICOM elements:</p>
+
+        <div class="procedure">
+            <h3>Editing a Private Element Value</h3>
+            <ol>
+                <li>Locate the private element in the tree view</li>
+                <li>Double-click on the Value column (third column)</li>
+                <li>Edit the value</li>
+                <li>Press Enter to confirm</li>
+            </ol>
+        </div>
+
+        <p>The same data type restrictions apply as with standard elements - ensure the value you enter matches the VR of the element.</p>
+    </div>
+
+    <div class="section" id="delete-private" data-help-id="delete-private">
+        <h2>Deleting Private Elements</h2>
+        <p>You can delete private elements individually:</p>
+
+        <div class="procedure">
+            <h3>Deleting a Private Element</h3>
+            <ol>
+                <li>Select the private element in the tree view</li>
+                <li>Press Delete or select <code>Edit → Delete Element</code> from the menu</li>
+            </ol>
+        </div>
+
+        <div class="warning">
+            <p><strong>Warning:</strong> When deleting a Private Creator element (group,0010-00FF), you must first delete all private elements in that block. The application will prevent you from deleting a private creator that has associated private elements.</p>
+        </div>
+    </div>
+
+    <div class="section" id="supported-dictionaries" data-help-id="supported-dictionaries">
+        <h2>Supported Private Dictionaries</h2>
+        <p>dcmQTreePy includes private dictionaries for the following vendors and organizations:</p>
+
+        <table>
+            <tr>
+                <th>Private Creator</th>
+                <th>Description</th>
+            </tr>
+            <tr>
+                <td>Accuray Robotic Control</td>
+                <td>Accuray radiosurgery system elements</td>
+            </tr>
+            <tr>
+                <td>SagiPlan</td>
+                <td>Brachytherapy treatment planning elements</td>
+            </tr>
+            <tr>
+                <td>Brainlab - ONC - Beam Parameters</td>
+                <td>Brainlab oncology beam parameter elements</td>
+            </tr>
+            <tr>
+                <td>Brainlab - ONC - Multi-axial treatment machine</td>
+                <td>Brainlab oncology treatment machine elements</td>
+            </tr>
+            <tr>
+                <td>GEMS_PETD_01</td>
+                <td>GE Medical Systems PET scanner elements</td>
+            </tr>
+            <tr>
+                <td>IBA</td>
+                <td>IBA proton therapy system elements</td>
+            </tr>
+            <tr>
+                <td>IMPAC</td>
+                <td>IMPAC Medical Systems elements</td>
+            </tr>
+            <tr>
+                <td>medPhoton 1.0</td>
+                <td>medPhoton imaging system elements</td>
+            </tr>
+            <tr>
+                <td>Philips PET Private Group</td>
+                <td>Philips PET scanner elements</td>
+            </tr>
+            <tr>
+                <td>RAYSEARCHLABS 2.0</td>
+                <td>RaySearch Laboratories treatment planning elements</td>
+            </tr>
+            <tr>
+                <td>SIEMENS MED SYNGO RT</td>
+                <td>Siemens radiation therapy elements</td>
+            </tr>
+            <tr>
+                <td>TOMO_DD_01</td>
+                <td>Tomotherapy delivery system elements</td>
+            </tr>
+            <tr>
+                <td>TOMO_HA_01</td>
+                <td>Tomotherapy HA system elements</td>
+            </tr>
+        </table>
+    </div>
+
+    <footer>
+        <p><a href="index.html">Back to Main Help</a></p>
+    </footer>
+</body>
+</html>

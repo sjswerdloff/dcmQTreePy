@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dcmQTreePy Help</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.5;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h1 {
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            border-bottom: 1px solid #bdc3c7;
+            padding-bottom: 5px;
+            margin-top: 25px;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        code {
+            background-color: #f0f0f0;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: Consolas, monospace;
+        }
+        .toc {
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .toc ul {
+            list-style-type: none;
+            padding-left: 20px;
+        }
+        .toc li {
+            margin-bottom: 5px;
+        }
+        .note {
+            background-color: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        .warning {
+            background-color: #fff8e6;
+            border-left: 4px solid #f39c12;
+            padding: 10px;
+            margin: 15px 0;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <h1 id="main">dcmQTreePy - DICOM Object Editor</h1>
+    <p>Welcome to the dcmQTreePy help documentation. dcmQTreePy is a multi-platform DICOM object editor that allows you to view, modify, and create DICOM files.</p>
+
+    <div class="toc">
+        <h2>Table of Contents</h2>
+        <ul>
+            <li><a href="#introduction">Introduction</a></li>
+            <li><a href="#getting-started">Getting Started</a></li>
+            <li><a href="#interface">User Interface</a></li>
+            <li><a href="#file-operations">File Operations</a></li>
+            <li><a href="#editing-elements">Editing DICOM Elements</a></li>
+            <li><a href="#private-elements">Working with Private Elements</a></li>
+            <li><a href="#keyboard-shortcuts">Keyboard Shortcuts</a></li>
+            <li><a href="#troubleshooting">Troubleshooting</a></li>
+        </ul>
+    </div>
+
+    <div class="section" id="introduction" data-help-id="introduction">
+        <h2>Introduction</h2>
+        <p>dcmQTreePy is an homage to DCMTree from IMPAC®, created to provide a multi-platform DICOM object editing tool. It's built using PySide6 (Qt) and pydicom libraries, making it available for Windows, macOS, and Linux.</p>
+
+        <p>Key features of dcmQTreePy include:</p>
+        <ul>
+            <li>Loading and viewing DICOM files in a tree structure</li>
+            <li>Editing DICOM element values</li>
+            <li>Adding new public and private elements</li>
+            <li>Support for various private DICOM dictionaries</li>
+            <li>Drag and drop support for DICOM files</li>
+            <li>Saving modified DICOM files</li>
+        </ul>
+    </div>
+
+    <div class="section" id="getting-started" data-help-id="getting-started">
+        <h2>Getting Started</h2>
+        <p>To begin using dcmQTreePy, you can open a DICOM file using one of the following methods:</p>
+        <ul>
+            <li>Click on <code>File → Open</code> in the menu bar</li>
+            <li>Drag and drop a DICOM file into the application window</li>
+        </ul>
+
+        <p>Once a file is loaded, you'll see:</p>
+        <ul>
+            <li>The file path in the file list section at the top</li>
+            <li>A tree view of all DICOM elements in the file</li>
+        </ul>
+
+        <div class="note">
+            <p><strong>Note:</strong> dcmQTreePy opens DICOM files with the "force" option enabled, allowing you to open some non-standard or potentially corrupted DICOM files.</p>
+        </div>
+    </div>
+
+    <div class="section" id="interface" data-help-id="interface">
+        <h2>User Interface</h2>
+        <p>The dcmQTreePy interface consists of two main sections:</p>
+
+        <h3>Files Section</h3>
+        <p>The top section displays a list of open DICOM files. You can:</p>
+        <ul>
+            <li>Click on a file to view its contents</li>
+            <li>Select a file and press Delete or use <code>File → Delete</code> to remove it from the list</li>
+            <li>Drag and drop additional files into this area</li>
+        </ul>
+
+        <h3>DICOM Elements Section</h3>
+        <p>The bottom section displays DICOM elements in a tree view with the following columns:</p>
+        <ul>
+            <li><strong>Tag</strong>: The DICOM tag in format (GGGG,EEEE)</li>
+            <li><strong>Name</strong>: The name of the DICOM element</li>
+            <li><strong>Value</strong>: The element's value (editable)</li>
+            <li><strong>VR</strong>: Value Representation (data type)</li>
+            <li><strong>Keyword</strong>: The keyword name of the element</li>
+        </ul>
+
+        <p>Elements are organized hierarchically, with sequences (SQ elements) containing nested datasets.</p>
+    </div>
+
+    <div class="section" id="file-operations" data-help-id="file-operations">
+        <h2>File Operations</h2>
+
+        <h3>Opening Files</h3>
+        <p>To open a DICOM file:</p>
+        <ol>
+            <li>Select <code>File → Open</code> from the menu</li>
+            <li>In the file dialog, select a DICOM file (typically with .dcm extension)</li>
+            <li>Click "Open"</li>
+        </ol>
+        <p>Alternatively, you can drag and drop DICOM files directly into the application.</p>
+
+        <h3>Saving Files</h3>
+        <p>To save changes to the current DICOM file:</p>
+        <ol>
+            <li>Select <code>File → Save</code> to overwrite the existing file</li>
+            <li>Select <code>File → Save As...</code> to save as a new file</li>
+        </ol>
+
+        <div class="warning">
+            <p><strong>Warning:</strong> When saving files, dcmQTreePy always writes in explicit VR transfer syntax (1.2.840.10008.1.2.1). This may change the transfer syntax of the original file.</p>
+        </div>
+
+        <h3>Removing Files from the List</h3>
+        <p>To remove a file from the file list (without deleting it from disk):</p>
+        <ol>
+            <li>Select the file in the list</li>
+            <li>Press the Delete key or select <code>File → Delete</code></li>
+        </ol>
+
+        <div class="note">
+            <p><strong>Note:</strong> If you have unsaved changes, you'll be prompted to confirm before switching or removing a file.</p>
+        </div>
+    </div>
+
+    <div class="section" id="editing-elements" data-help-id="editing-elements">
+        <h2>Editing DICOM Elements</h2>
+
+        <h3>Modifying Element Values</h3>
+        <p>To edit a DICOM element value:</p>
+        <ol>
+            <li>Double-click on the value column (third column) of the element</li>
+            <li>Enter the new value</li>
+            <li>Press Enter to confirm</li>
+        </ol>
+
+        <p>For multi-valued elements (like arrays), use proper syntax:</p>
+        <ul>
+            <li>For numeric arrays, values should be in the format: <code>[value1, value2, value3]</code></li>
+            <li>For text arrays, values should be in the format: <code>["value1", "value2", "value3"]</code></li>
+        </ul>
+
+        <h3>Adding Public Elements</h3>
+        <p>To add a standard DICOM element:</p>
+        <ol>
+            <li>Select the element or sequence where you want to add the new element</li>
+            <li>Select <code>Edit → Add Element</code> from the menu</li>
+            <li>In the dialog, enter the Group and Element in hexadecimal (e.g., "0010" for group)</li>
+            <li>The element name will be populated automatically if valid</li>
+            <li>Enter the value(s) in the Value box, with each line representing a value in a multi-value element</li>
+            <li>Click OK to add the element</li>
+        </ol>
+
+        <h3>Deleting Elements</h3>
+        <p>To delete a DICOM element:</p>
+        <ol>
+            <li>Select the element in the tree view</li>
+            <li>Press Delete or select <code>Edit → Delete Element</code></li>
+        </ol>
+    </div>
+
+    <div class="section" id="private-elements" data-help-id="private-elements">
+        <h2>Working with Private Elements</h2>
+
+        <p>DICOM private elements are vendor-specific elements with odd-numbered group numbers.</p>
+
+        <h3>Adding Private Elements</h3>
+        <p>To add a private element:</p>
+        <ol>
+            <li>Select the element or sequence where you want to add the private element</li>
+            <li>Select <code>Edit → Add Private Element</code> from the menu</li>
+            <li>Select a Private Creator from the dropdown list</li>
+            <li>Enter the Group number (must be odd) and Element (Byte) number</li>
+            <li>The element name will be populated automatically if found in the dictionary</li>
+            <li>Enter the value(s) in the Value box</li>
+            <li>Click OK to add the element</li>
+        </ol>
+
+        <div class="note">
+            <p><strong>Note:</strong> The application automatically handles the private creator element (group,10) when adding private elements.</p>
+        </div>
+
+        <h3>Supported Private Dictionaries</h3>
+        <p>dcmQTreePy includes private dictionaries for the following vendors/creators:</p>
+        <ul>
+            <li>Accuray Robotic Control</li>
+            <li>SagiPlan</li>
+            <li>Brainlab - ONC - Beam Parameters</li>
+            <li>Brainlab - ONC - Multi-axial treatment machine</li>
+            <li>GEMS_PETD_01</li>
+            <li>IBA</li>
+            <li>IMPAC</li>
+            <li>medPhoton 1.0</li>
+            <li>Philips PET Private Group</li>
+            <li>RAYSEARCHLABS 2.0</li>
+            <li>SIEMENS MED SYNGO RT</li>
+            <li>TOMO_DD_01</li>
+            <li>TOMO_HA_01</li>
+        </ul>
+    </div>
+
+    <div class="section" id="keyboard-shortcuts" data-help-id="keyboard-shortcuts">
+        <h2>Keyboard Shortcuts</h2>
+        <p>dcmQTreePy provides the following keyboard shortcuts:</p>
+
+        <table>
+            <tr>
+                <th>Shortcut</th>
+                <th>Action</th>
+            </tr>
+            <tr>
+                <td>Delete (in file list)</td>
+                <td>Remove selected file from list</td>
+            </tr>
+            <tr>
+                <td>Delete (in tree view)</td>
+                <td>Delete selected DICOM element</td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="section" id="troubleshooting" data-help-id="troubleshooting">
+        <h2>Troubleshooting</h2>
+
+        <h3>Common Issues</h3>
+
+        <h4>Unable to save private elements</h4>
+        <p>If you're having trouble saving private elements, ensure that:</p>
+        <ul>
+            <li>The private creator element exists for the group</li>
+            <li>The private element is defined in one of the supported private dictionaries</li>
+        </ul>
+
+        <h4>Value conversion errors</h4>
+        <p>When entering values that don't match the expected VR (Value Representation):</p>
+        <ul>
+            <li>For numeric types (SS, US, FL, FD), ensure you enter valid numbers</li>
+            <li>For multi-valued elements, use the proper syntax</li>
+        </ul>
+
+        <h4>Errors when saving files</h4>
+        <p>If you encounter errors when saving files:</p>
+        <ul>
+            <li>Check for required elements based on the SOP Class UID</li>
+            <li>Ensure values have appropriate formats for their VRs</li>
+            <li>Check the application logs for more information</li>
+        </ul>
+    </div>
+
+    <footer>
+        <p>&copy; 2025 Stuart Swerdloff - dcmQTreePy Documentation</p>
+    </footer>
+</body>
+</html>
