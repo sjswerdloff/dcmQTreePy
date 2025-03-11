@@ -102,7 +102,7 @@ class DCMQtreePy(QMainWindow):
                 logging.error(f"Unable to load private dictionary for {creator}")
 
         json_privates_file = "local_privates.json"
-        if Path(json_privates_file).exists:
+        if Path(json_privates_file).exists():
             logging.info(f"Loading Private Dictionaries from {json_privates_file}")
 
             try:
