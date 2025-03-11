@@ -45,9 +45,10 @@ def test_impac_tag_format():
         private_element = element & 0x00FF
 
         # Most IMPAC private elements use block 0x10
-        assert (
-            private_creator_block == 0x10 or private_creator_block == 0x00
-        ), f"Tag {hex(tag)} has unusual private creator block {private_creator_block:02X}"
+        assert private_creator_block in [
+            0x10,
+            0x00,
+        ], f"Tag {hex(tag)} has unusual private creator block {private_creator_block:02X}"
 
         # Private elements should be between 0x01 and 0xFF
         assert 0x01 <= private_element <= 0xFF, f"Tag {hex(tag)} has unusual private element {private_element:02X}"
