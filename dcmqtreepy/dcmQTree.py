@@ -102,18 +102,19 @@ class DCMQtreePy(QMainWindow):
                 logging.error(f"Unable to load private dictionary for {creator}")
 
         json_privates_file = "local_privates.json"
-        logging.info(f"Loading Private Dictionaries from {json_privates_file}")
+        if Path(json_privates_file).exists:
+            logging.info(f"Loading Private Dictionaries from {json_privates_file}")
 
-        try:
-            private_dictionaries_from_json = pydicom_private_dicts_from_json(json_privates_file)
-            for creator, private_dict in private_dictionaries_from_json.items():
-                try:
-                    pydicom.datadict.add_private_dict_entries(creator, private_dict)
-                    logging.warning(f"Private dictionary for {creator} has been loaded")
-                except ValueError:
-                    logging.error(f"Unable to load private dictionary for {creator}")
-        except Exception as json_privates_exc:
-            logging.error(json_privates_exc)
+            try:
+                private_dictionaries_from_json = pydicom_private_dicts_from_json(json_privates_file)
+                for creator, private_dict in private_dictionaries_from_json.items():
+                    try:
+                        pydicom.datadict.add_private_dict_entries(creator, private_dict)
+                        logging.warning(f"Private dictionary for {creator} has been loaded")
+                    except ValueError:
+                        logging.error(f"Unable to load private dictionary for {creator}")
+            except Exception as json_privates_exc:
+                logging.error(json_privates_exc)
 
         # In __init__ after setting up the UI
         self.installEventFilter(self)
