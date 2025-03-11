@@ -89,12 +89,12 @@ class DCMQtreePy(QMainWindow):
             except ValueError:
                 logging.error(f"Unable to load private dictionary for {creator}")
 
-        json_privates_file = "sample_privates.json"
+        json_privates_file = "local_privates.json"
         logging.info(f"Loading Private Dictionaries from {json_privates_file}")
 
         try:
             private_dictionaries_from_json = pydicom_private_dicts_from_json(json_privates_file)
-            for creator, private_dict in new_private_dictionaries.items():
+            for creator, private_dict in private_dictionaries_from_json.items():
                 try:
                     pydicom.datadict.add_private_dict_entries(creator, private_dict)
                     logging.warning(f"Private dictionary for {creator} has been loaded")
