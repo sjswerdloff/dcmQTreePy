@@ -1,5 +1,6 @@
 """Unit tests for impac_privates.py"""
 
+import pytest
 
 from dcmqtreepy.impac_privates import impac_private_dict
 
