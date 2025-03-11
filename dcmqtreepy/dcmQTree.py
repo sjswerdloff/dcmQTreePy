@@ -101,7 +101,6 @@ class DCMQtreePy(QMainWindow):
             except ValueError:
                 logging.error(f"Unable to load private dictionary for {creator}")
 
-
         json_privates_file = "local_privates.json"
         logging.info(f"Loading Private Dictionaries from {json_privates_file}")
 
@@ -115,7 +114,6 @@ class DCMQtreePy(QMainWindow):
                     logging.error(f"Unable to load private dictionary for {creator}")
         except Exception as json_privates_exc:
             logging.error(json_privates_exc)
-
 
         # In __init__ after setting up the UI
         self.installEventFilter(self)

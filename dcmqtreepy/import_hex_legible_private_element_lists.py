@@ -73,8 +73,6 @@ def generate_python_code_from_private_dict_list(
     python_code_lines = []
     python_code_lines.append("from typing import Dict, Tuple\n")
     python_code_lines.append("new_private_dictionaries: Dict[str, Dict[str, Tuple[str, str, str, str]]] = {\n")
-    converted_dict_of_privates = dict()
-    converted_list_of_private_dicts = []
     for pythonic_dict_of_private_dicts in pythonic_list_of_private_dicts:
         for creator, dict_of_private_elements in pythonic_dict_of_private_dicts.items():
             creator_line_of_code = "\t" + wrap_in_single_quotes(creator) + ":" + "{" + "\n"
@@ -90,7 +88,6 @@ def generate_python_code_from_private_dict_list(
                 vm = entry[1]
                 private_name = entry[2]
                 retired = entry[3]
-                single_quote = "'"
                 comma = ","
                 quoted_hex_tag = hex_tag
                 if for_pydicom_pr:
@@ -121,8 +118,8 @@ def generate_python_code_from_private_dict_list(
 def jsonify_pydicom_private_dict_list(
     pythonic_list_of_private_dicts: List[Dict[str, Dict[int, List]]]
 ) -> List[Dict[str, Dict[str, List]]]:
-    """For conversion of an existing list of pythonic private dictionaries so that json.dump(jsonic_list_of_private_dict) will be
-    of the same format as the rest of this module uses to deserialize a private dictionary from JSON.
+    """For conversion of an existing list of pythonic private dictionaries so that json.dump(jsonic_list_of_private_dict)
+    will be of the same format as the rest of this module uses to deserialize a private dictionary from JSON.
     Probably will be a list of one, but... keeps the logic consistent and makes for easier merging of json.
 
     Args:
@@ -170,8 +167,8 @@ if __name__ == "__main__":
                 private_element_dictionary.update(impac_private_dict)
             datadict.add_private_dict_entries(private_creator, private_element_dictionary)
             print(f"Added private dictionary for {private_creator}")
-        except:
-            print(f"{private_creator} failed private dict addition")
+        except Exception as eFailedPrivateDict:
+            print(f"{private_creator} failed private dict addition: {eFailedPrivateDict}")
 
     # json_ready_impac_dict = jsonify_pydicom_private_dict_list([{"IMPAC": impac_private_dict}])
     converted_list_of_private_dicts = list()
