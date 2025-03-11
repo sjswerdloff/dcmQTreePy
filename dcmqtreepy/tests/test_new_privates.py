@@ -1,5 +1,6 @@
 """Unit tests for new_privates.py"""
 
+import pytest
 
 from dcmqtreepy.new_privates import new_private_dictionaries
 
