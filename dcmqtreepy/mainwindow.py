@@ -3,7 +3,7 @@
 ################################################################################
 ## Form generated from reading UI file 'mainwindow.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.7.2
+## Created by: Qt User Interface Compiler version 6.8.3
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
@@ -84,6 +84,8 @@ class Ui_MainWindow(object):
         self.actionDelete_Element.setObjectName("actionDelete_Element")
         self.actionDelete = QAction(MainWindow)
         self.actionDelete.setObjectName("actionDelete")
+        self.actionView_Image = QAction(MainWindow)
+        self.actionView_Image.setObjectName("actionView_Image")
         self.central_widget = QWidget(MainWindow)
         self.central_widget.setObjectName("central_widget")
         self.formLayout_5 = QFormLayout(self.central_widget)
@@ -158,6 +160,8 @@ class Ui_MainWindow(object):
         self.menuMain_Window.setObjectName("menuMain_Window")
         self.menuEdit = QMenu(self.menubar)
         self.menuEdit.setObjectName("menuEdit")
+        self.menuOptions = QMenu(self.menubar)
+        self.menuOptions.setObjectName("menuOptions")
         MainWindow.setMenuBar(self.menubar)
         self.statusbar = QStatusBar(MainWindow)
         self.statusbar.setObjectName("statusbar")
@@ -165,6 +169,7 @@ class Ui_MainWindow(object):
 
         self.menubar.addAction(self.menuMain_Window.menuAction())
         self.menubar.addAction(self.menuEdit.menuAction())
+        self.menubar.addAction(self.menuOptions.menuAction())
         self.menuMain_Window.addAction(self.actionOpen)
         self.menuMain_Window.addAction(self.actionSave)
         self.menuMain_Window.addAction(self.actionSave_As)
@@ -173,6 +178,7 @@ class Ui_MainWindow(object):
         self.menuEdit.addAction(self.actionAdd_Element)
         self.menuEdit.addAction(self.actionAdd_Private_Element)
         self.menuEdit.addAction(self.actionDelete_Element)
+        self.menuOptions.addAction(self.actionView_Image)
 
         self.retranslateUi(MainWindow)
 
@@ -190,9 +196,11 @@ class Ui_MainWindow(object):
         self.actionAdd_Private_Element.setText(QCoreApplication.translate("MainWindow", "Add Private Element", None))
         self.actionDelete_Element.setText(QCoreApplication.translate("MainWindow", "Delete Element", None))
         self.actionDelete.setText(QCoreApplication.translate("MainWindow", "Delete", None))
+        self.actionView_Image.setText(QCoreApplication.translate("MainWindow", "View Image", None))
         self.groupBox.setTitle(QCoreApplication.translate("MainWindow", "Files", None))
         self.groupBox_2.setTitle(QCoreApplication.translate("MainWindow", "DICOM Elements", None))
         self.menuMain_Window.setTitle(QCoreApplication.translate("MainWindow", "File", None))
         self.menuEdit.setTitle(QCoreApplication.translate("MainWindow", "Edit", None))
+        self.menuOptions.setTitle(QCoreApplication.translate("MainWindow", "Options", None))
 
     # retranslateUi

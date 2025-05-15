@@ -163,8 +163,15 @@
     <addaction name="actionAdd_Private_Element"/>
     <addaction name="actionDelete_Element"/>
    </widget>
+   <widget class="QMenu" name="menuOptions">
+    <property name="title">
+     <string>Options</string>
+    </property>
+    <addaction name="actionView_Image"/>
+   </widget>
    <addaction name="menuMain_Window"/>
    <addaction name="menuEdit"/>
+   <addaction name="menuOptions"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <action name="actionFile">
@@ -205,6 +212,11 @@
   <action name="actionDelete">
    <property name="text">
     <string>Delete</string>
+   </property>
+  </action>
+  <action name="actionView_Image">
+   <property name="text">
+    <string>View Image</string>
    </property>
   </action>
  </widget>
