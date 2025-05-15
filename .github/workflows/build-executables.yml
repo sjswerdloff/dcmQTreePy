@@ -1,0 +1,153 @@
+name: Build Executables
+
+on:
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            platform-name: windows
+            asset-name: dcmQTreePy-windows
+            path-sep: ";"
+
+          - os: macos-latest
+            platform-name: macos
+            asset-name: dcmQTreePy-macos
+            path-sep: ":"
+
+          - os: ubuntu-latest
+            platform-name: ubuntu
+            asset-name: dcmQTreePy-ubuntu
+            path-sep: ":"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: 1.7.1
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+
+    - name: Install Qt6 (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install qt@6
+        echo "ASSISTANT_PATH=$(find /opt/homebrew -name assistant -type f | grep -v Assistant.app | head -n 1)" >> $GITHUB_ENV
+
+    - name: Install Qt6 (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qt6-tools-dev qt6-documentation-tools qt6-base-dev
+        echo "ASSISTANT_PATH=$(find /usr -name assistant -type f | grep -v Assistant.app | head -n 1)" >> $GITHUB_ENV
+
+    - name: Install Qt6 (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        choco install qt6-base
+        $assistantPath = Get-ChildItem -Path "C:\" -Recurse -Filter "assistant.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*Qt6*" } | Select-Object -First 1 -ExpandProperty FullName
+        echo "ASSISTANT_PATH=$assistantPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Install dependencies with Poetry
+      run: |
+        poetry install
+        poetry add pyinstaller
+
+    - name: Verify Qt Assistant installation
+      run: |
+        echo "Looking for Qt Assistant..."
+        echo "Configured path: $ASSISTANT_PATH"
+
+        # If the path is empty, search for it
+        if [ -z "$ASSISTANT_PATH" ]; then
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            echo "Searching in homebrew paths..."
+            export ASSISTANT_PATH=$(find /opt/homebrew -name assistant | grep -v "Assistant.app" | head -n 1)
+          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            echo "Searching in system paths..."
+            export ASSISTANT_PATH=$(find /usr -name assistant | grep -v "Assistant.app" | head -n 1)
+          fi
+          echo "ASSISTANT_PATH=$ASSISTANT_PATH" >> $GITHUB_ENV
+        fi
+
+        if [ -f "$ASSISTANT_PATH" ]; then
+          echo "Qt Assistant found at $ASSISTANT_PATH"
+        else
+          echo "Qt Assistant not found!"
+          echo "Showing all found assistant binaries:"
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            find /opt/homebrew -name assistant
+          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            find /usr -name assistant
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            Get-ChildItem -Path "C:\" -Recurse -Filter "assistant.exe" -ErrorAction SilentlyContinue | Select-Object -First 10 FullName
+          fi
+        fi
+      shell: bash
+
+    - name: Build with PyInstaller (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help:help" --add-binary="${ASSISTANT_PATH}:." dcmqtreepy/dcmQTree.py
+
+    - name: Build with PyInstaller (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help:help" --add-binary="${ASSISTANT_PATH}:." dcmqtreepy/dcmQTree.py
+
+    - name: Build with PyInstaller (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help;help" --add-binary="$env:ASSISTANT_PATH;." dcmqtreepy/dcmQTree.py
+
+    - name: Create distribution package
+      run: |
+        mkdir dist-package
+        if [ "${{ matrix.os }}" = "macos-latest" ]; then
+          cp -r dist/dcmQTreePy.app dist-package/
+          # Create a DMG file for easier distribution
+          hdiutil create -volname dcmQTreePy -srcfolder dist-package -ov -format UDZO dist/dcmQTreePy.dmg
+        elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+          cp -r dist/dcmQTreePy dist-package/
+          # Create a tarball for Linux
+          tar -czvf dist/dcmQTreePy-linux.tar.gz -C dist-package .
+        elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+          cp -r dist/dcmQTreePy dist-package/
+          # Create a ZIP file for Windows
+          Compress-Archive -Path dist-package/* -DestinationPath dist/dcmQTreePy-windows.zip
+        fi
+      shell: bash
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.asset-name }}
+        path: dist/
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: github.ref == 'refs/heads/main'
+      with:
+        tag_name: v${{ github.run_number }}
+        name: Release ${{ github.run_number }}
+        draft: true
+        files: |
+          dist/dcmQTreePy.dmg
+          dist/dcmQTreePy-linux.tar.gz
+          dist/dcmQTreePy-windows.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
