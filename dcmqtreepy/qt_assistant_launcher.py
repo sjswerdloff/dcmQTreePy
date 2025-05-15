@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QProcess
 from PySide6.QtWidgets import QMessageBox
@@ -11,12 +12,78 @@ logger.setLevel(logging.DEBUG)
 
 
 class HelpAssistant(QObject):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.assistant_process = None
-        self.help_collection = None  # Path to .qhc file
+    # Platform-specific assistant executable path candidates
+    _PLATFORM_CANDIDATES: dict[str, list[Callable[["HelpAssistant"], str]]] = {
+        "darwin": [
+            # Packaged first
+            lambda self: os.path.join(getattr(sys, "_MEIPASS", ""), "assistant"),
+            # App bundle Resources (PyInstaller macOS .app)
+            lambda self: os.path.normpath(os.path.join(os.path.dirname(sys.executable), "..", "Resources", "assistant")),
+            # Homebrew / QtKit installs
+            lambda self: "/opt/homebrew/bin/assistant",
+            lambda self: "/usr/local/bin/assistant",
+            lambda self: "/Applications/Qt/Tools/QtAssistant.app/Contents/MacOS/QtAssistant",
+            # Fallback to PATH
+            lambda self: "assistant",
+        ],
+        "win": [
+            lambda self: os.path.join(getattr(sys, "_MEIPASS", ""), "assistant.exe"),
+            lambda self: "assistant.exe",
+        ],
+        "linux": [
+            lambda self: os.path.join(getattr(sys, "_MEIPASS", ""), "assistant"),
+            lambda self: "assistant",
+        ],
+    }
 
-    def setup_assistant(self, collection_file):
+    # Help topic to HTML file mapping
+    _TOPIC_SUFFIX: dict[str, str] = {
+        "dicom": "index.html",
+        "file_operations": "file-operations-help.html",
+        "add_element": "editing-elements-help.html",
+        "delete_element": "editing-elements-help.html",
+        "add_private_element": "private-elements-help.html",
+        "dicom_tree": "interface-help.html",
+        "file_list": "interface-help.html",
+    }
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self.assistant_process: Optional[QProcess] = None
+        self.help_collection: Optional[str] = None  # Path to .qhc file
+
+    def _platform_key(self) -> str:
+        """
+        Determine the platform key for candidate selection.
+
+        Returns:
+            str: Platform identifier ("darwin", "win", or "linux")
+        """
+        if sys.platform == "darwin":
+            return "darwin"
+        return "win" if sys.platform.startswith("win") else "linux"
+
+    def _find_assistant_executable(self) -> str:
+        """
+        Find the appropriate assistant executable for the current platform.
+
+        Returns:
+            str: Path to the assistant executable
+        """
+        platform_key = self._platform_key()
+        for candidate_fn in self._PLATFORM_CANDIDATES[platform_key]:
+            path = candidate_fn(self)
+            logger.debug(f"Trying Assistant candidate: {path}")
+            if os.path.exists(path) or path in ("assistant", "assistant.exe"):
+                logger.info(f"Found Assistant at: {path}")
+                return path
+
+        # As a last resort, use the default fallback
+        fallback = self._PLATFORM_CANDIDATES[platform_key][-1](self)
+        logger.warning(f"No Assistant found in common locations, falling back to: {fallback}")
+        return fallback
+
+    def setup_assistant(self, collection_file: str) -> None:
         """
         Initialize the Qt Assistant with the specified help collection file.
 
@@ -27,7 +94,7 @@ class HelpAssistant(QObject):
         if not os.path.exists(collection_file):
             raise FileNotFoundError(f"Help collection file not found: {collection_file}")
 
-    def launch_assistant(self):
+    def launch_assistant(self) -> bool:
         """
         Launch Qt Assistant if it's not already running.
         Returns True if successful, False otherwise.
@@ -41,14 +108,35 @@ class HelpAssistant(QObject):
                 self.assistant_process = None
 
         try:
-            return self._find_and_start_launch_assistant()
+            return self._find_and_start_assistant()
         except Exception as e:
             logger.error(f"Error launching Qt Assistant: {str(e)}")
             QMessageBox.critical(None, "Error", f"Error launching Qt Assistant: {str(e)}")
             return False
 
-    # TODO Rename this here and in `launch_assistant`
-    def _find_and_start_launch_assistant(self):
+    def _show_error_message(self, message: str, details: str) -> bool:
+        """
+        Show an error message and log the error.
+
+        Args:
+            message (str): Error message prefix
+            details (str): Error details
+
+        Returns:
+            bool: Always returns False to indicate failure
+        """
+        full_message = f"{message}{details}"
+        logger.error(full_message)
+        QMessageBox.critical(None, "Error", full_message)
+        return False
+
+    def _find_and_start_assistant(self) -> bool:
+        """
+        Find and start the Qt Assistant process.
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
         self.assistant_process = QProcess()
 
         # Set up process to capture output
@@ -57,94 +145,15 @@ class HelpAssistant(QObject):
 
         # Get absolute path to the help collection file for PyInstaller compatibility
         help_collection_path = self.help_collection
-        if hasattr(sys, "_MEIPASS") and not os.path.isabs(self.help_collection):
-            help_collection_path = os.path.join(sys._MEIPASS, self.help_collection)
+        if hasattr(sys, "_MEIPASS") and not os.path.isabs(self.help_collection or ""):
+            help_collection_path = os.path.join(sys._MEIPASS, self.help_collection or "")
 
-        if not os.path.exists(help_collection_path):
-            return self._extracted_from_launch_assistant_29("Help collection file not found: ", help_collection_path)
-        assistant_path = None
-        # Determine the assistant executable path based on platform
-        if sys.platform == "darwin":
-            try:
-                # First check if we're running from a PyInstaller package
-                base_path = sys._MEIPASS
-                assistant_path = os.path.join(base_path, "assistant")
-                if os.path.exists(assistant_path):
-                    logger.info(f"Using bundled Assistant at: {assistant_path}")
-                else:
-                    # If we're in PyInstaller but assistant isn't in the base directory,
-                    # check if it's in the app bundle
-                    if getattr(sys, "frozen", False):
-                        # Check in the app bundle Resources
-                        bundle_path = os.path.normpath(os.path.join(os.path.dirname(sys.executable), "..", "Resources"))
-                        possible_assistant = os.path.join(bundle_path, "assistant")
-                        if os.path.exists(possible_assistant):
-                            assistant_path = possible_assistant
-                            logger.info(f"Found Assistant in app bundle: {assistant_path}")
+        if not os.path.exists(help_collection_path or ""):
+            return self._show_error_message("Help collection file not found: ", str(help_collection_path))
 
-                    # If still not found, fall back to system paths
-                    if assistant_path is None or not os.path.exists(assistant_path):
-                        possible_paths = [
-                            "/opt/homebrew/bin/assistant",  # Homebrew installation
-                            "/usr/local/bin/assistant",  # Alternative Homebrew location
-                            "/Applications/Qt/Tools/QtAssistant.app/Contents/MacOS/QtAssistant",  # Qt installation
-                            # PySide6-specific locations
-                            os.path.join(os.path.dirname(sys.executable), "assistant"),
-                        ]
-                        for path in possible_paths:
-                            logger.debug(f"Checking for Assistant at: {path}")
-                            if os.path.exists(path):
-                                logger.info(f"Found Assistant at: {path}")
-                                assistant_path = path
-                                break
-                        else:
-                            logger.warning("No Assistant found in common locations, falling back to 'assistant' command")
-                            assistant_path = "assistant"
-            except Exception as e:
-                logger.warning(f"Error while looking for bundled Assistant: {str(e)}")
-                # Fall back to the existing system path search logic
-                possible_paths = [
-                    "/opt/homebrew/bin/assistant",  # Homebrew installation
-                    "/usr/local/bin/assistant",  # Alternative Homebrew location
-                    "/Applications/Qt/Tools/QtAssistant.app/Contents/MacOS/QtAssistant",  # Qt installation
-                    # PySide6-specific locations
-                    os.path.join(os.path.dirname(sys.executable), "assistant"),
-                ]
-                for path in possible_paths:
-                    logger.debug(f"Checking for Assistant at: {path}")
-                    if os.path.exists(path):
-                        logger.info(f"Found Assistant at: {path}")
-                        assistant_path = path
-                        break
-                else:
-                    logger.warning("No Assistant found in common locations, falling back to 'assistant' command")
-                    assistant_path = "assistant"
-                    logger.debug(f"Using system Assistant: {assistant_path}")
-        elif sys.platform.startswith("win"):
-            try:
-                # First check if we're running from a PyInstaller package
-                base_path = sys._MEIPASS
-                assistant_path = os.path.join(base_path, "assistant.exe")
-                if os.path.exists(assistant_path):
-                    logger.info(f"Using bundled Assistant at: {assistant_path}")
-                else:  # Handles both win32 and win64
-                    assistant_path = "assistant.exe"
-                    logger.info(f"Using system Assistant: {assistant_path}")
-            except Exception:
-                assistant_path = "assistant.exe"
-            logger.debug(f"Windows platform detected, using: {assistant_path}")
-        else:  # Linux and others
-            try:
-                # Check for PyInstaller bundle first
-                base_path = sys._MEIPASS
-                assistant_path = os.path.join(base_path, "assistant")
-                if os.path.exists(assistant_path):
-                    logger.info(f"Using bundled Assistant at: {assistant_path}")
-                else:
-                    assistant_path = "assistant"
-            except Exception:
-                assistant_path = "assistant"
-            logger.debug(f"Unix-like platform detected, using: {assistant_path}")
+        # Find the appropriate assistant executable
+        assistant_path = self._find_assistant_executable()
+        logger.info(f"Using Qt Assistant at: {assistant_path}")
 
         # Force show window (these are the key parameters that ensure the window appears)
         args = [
@@ -170,17 +179,16 @@ class HelpAssistant(QObject):
 
         # Start the Assistant process
         if assistant_path is None:
-            logger.error("Assistant path not found, unable to provide QtAssistant based help")
-            QMessageBox.critical(None, "Error", "Assistant path not found. Help system unavailable.")
-            return False
-        else:
-            logger.debug(f"Starting Assistant: {assistant_path} with args: {args}")
-            self.assistant_process.start(assistant_path, args)
+            return self._show_error_message("Assistant path not found.", " Help system unavailable.")
 
-            # Wait for the process to start and check for errors
+        logger.debug(f"Starting Assistant: {assistant_path} with args: {args}")
+        self.assistant_process.start(assistant_path, args)
+
+        # Wait for the process to start and check for errors
         if not self.assistant_process.waitForStarted(5000):  # 5 second timeout
             error = self.assistant_process.errorString()
-            return self._extracted_from_launch_assistant_29("Failed to start Qt Assistant: ", error)
+            return self._show_error_message("Failed to start Qt Assistant: ", error)
+
         # Check if process immediately terminated with error
         if self.assistant_process.state() == QProcess.ProcessState.NotRunning:
             exit_code = self.assistant_process.exitCode()
@@ -211,13 +219,7 @@ class HelpAssistant(QObject):
         logger.info("Qt Assistant started successfully")
         return True
 
-    # TODO Rename this here and in `launch_assistant`
-    def _extracted_from_launch_assistant_29(self, arg0, arg1):
-        logger.error(f"{arg0}{arg1}")
-        QMessageBox.critical(None, "Error", f"{arg0}{arg1}")
-        return False
-
-    def show_help_topic(self, help_id):
+    def show_help_topic(self, help_id: str) -> None:
         """
         Display a specific help topic in Qt Assistant.
 
@@ -227,26 +229,18 @@ class HelpAssistant(QObject):
         if not self.launch_assistant():
             return
 
-        # Format the help identifier correctly
-        # Try multiple approaches to activate the correct page
+        # Format commands based on help_id
         try:
-            # Try to activate by identifier first
-            self.assistant_process.write(f"activateIdentifier {help_id}\n".encode())
+            # Always send activateIdentifier first
+            commands = [f"activateIdentifier {help_id}"]
 
-            # Also try with the full URL format
-            self.assistant_process.write(f"setSource qthelp://dcmqtreepy/doc/{help_id}.html\n".encode())
+            # Then fallback to a URL
+            suffix = self._TOPIC_SUFFIX.get(help_id, f"{help_id}.html")
+            commands.append(f"setSource qthelp://dcmqtreepy/doc/{suffix}")
 
-            # Try direct file access if the above fails
-            if help_id == "dicom":
-                self.assistant_process.write("setSource qthelp://dcmqtreepy/doc/index.html\n".encode())
-            elif help_id == "file_operations":
-                self.assistant_process.write("setSource qthelp://dcmqtreepy/doc/file-operations-help.html\n".encode())
-            elif help_id in ["add_element", "delete_element"]:
-                self.assistant_process.write("setSource qthelp://dcmqtreepy/doc/editing-elements-help.html\n".encode())
-            elif help_id == "add_private_element":
-                self.assistant_process.write("setSource qthelp://dcmqtreepy/doc/private-elements-help.html\n".encode())
-            elif help_id in ["dicom_tree", "file_list"]:
-                self.assistant_process.write("setSource qthelp://dcmqtreepy/doc/interface-help.html\n".encode())
+            # Send all commands
+            for cmd in commands:
+                self.assistant_process.write(f"{cmd}\n".encode())
 
             # Also try activating the window again
             self.activate_assistant_window()
@@ -255,21 +249,21 @@ class HelpAssistant(QObject):
         except Exception as e:
             QMessageBox.warning(None, "Warning", f"Failed to navigate to help topic: {str(e)}")
 
-    def handle_assistant_stdout(self):
+    def handle_assistant_stdout(self) -> None:
         """Handle standard output from the assistant process"""
         data = self.assistant_process.readAllStandardOutput()
         output = bytes(data).decode("utf-8", errors="replace")
         if output.strip():  # Only log if there's actual content
             logger.debug(f"Assistant stdout: {output.strip()}")
 
-    def handle_assistant_stderr(self):
+    def handle_assistant_stderr(self) -> None:
         """Handle standard error from the assistant process"""
         data = self.assistant_process.readAllStandardError()
         output = bytes(data).decode("utf-8", errors="replace")
         if output.strip():  # Only log if there's actual content
             logger.warning(f"Assistant stderr: {output.strip()}")
 
-    def activate_assistant_window(self):
+    def activate_assistant_window(self) -> None:
         """Attempt to activate the assistant window"""
         if not self.assistant_process or self.assistant_process.state() != QProcess.ProcessState.Running:
             return
@@ -310,15 +304,17 @@ class HelpAssistant(QObject):
         except Exception as e:
             logger.warning(f"Failed to activate Assistant window: {str(e)}")
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """
         Clean up the assistant process when the application closes.
         Must be called explicitly, typically in the application's closeEvent handler.
         """
         if self.assistant_process is None:
             return
+
         logger.debug("Cleaning up Assistant process...")
         self.assistant_process.terminate()
+
         if self.assistant_process.waitForFinished(3000):  # Wait up to 3 seconds
             logger.info("Assistant process terminated normally")
         else:
@@ -330,77 +326,3 @@ class HelpAssistant(QObject):
             logger.info("Assistant process cleanup completed")
         else:
             logger.error("Failed to clean up Assistant process")
-
-
-# Example usage:
-"""
-import atexit
-
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QPushButton, QLineEdit, QApplication
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QShortcut, QKeySequence
-
-class ExampleWidget(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout()
-
-        # Create a button with associated help
-        save_button = QPushButton("Save")
-        # Help ID can be a registered help tag or a URL to specific documentation
-        save_button.setProperty('help_id', 'save-operation')  # Tag in .qhp file
-        # Alternative: Direct URL to documentation
-        # save_button.setProperty('help_id', 'qthelp://yournamespace/doc/path/to/save-operation.html')
-        layout.addWidget(save_button)
-
-        # Create a text field with different help context
-        name_input = QLineEdit()
-        name_input.setPlaceholderText("Enter name")
-        name_input.setProperty('help_id', 'name-input-rules')
-        layout.addWidget(name_input)
-
-        self.setLayout(layout)
-
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.help_assistant = HelpAssistant(self)
-        self.help_assistant.setup_assistant('path/to/your.qhc')
-
-        # Register cleanup with atexit
-        atexit.register(self.help_assistant.cleanup)
-
-        # Connect F1 key to context-sensitive help
-        self.f1_shortcut = QShortcut(QKeySequence("F1"), self)
-        self.f1_shortcut.activated.connect(self.show_context_help)
-
-        # Add Command-? shortcut for macOS
-        if sys.platform == 'darwin':
-            # On macOS, Qt automatically converts Meta (Command) to Control
-            self.help_shortcut = QShortcut(QKeySequence("Ctrl+?"), self)
-            self.help_shortcut.activated.connect(self.show_context_help)
-            logger.debug("Added macOS Command-? help shortcut")
-
-        # Set up the central widget
-        self.setCentralWidget(ExampleWidget())
-
-    def show_context_help(self):
-        # Determine the current context and show appropriate help
-        current_widget = QApplication.focusWidget()
-        if current_widget:
-            help_id = current_widget.property('help_id')
-            if help_id:
-                logger.debug(f"Showing help for widget: {current_widget.__class__.__name__}, help_id: {help_id}")
-                self.help_assistant.show_help_topic(help_id)
-            else:
-                logger.debug(f"No help_id found for widget: {current_widget.__class__.__name__}")
-                # Fall back to general help if no specific help is defined
-                self.help_assistant.show_help_topic('general-help')
-        else:
-            logger.debug("No widget currently has focus")
-            self.help_assistant.show_help_topic('general-help')
-
-    def closeEvent(self, event):
-        self.help_assistant.cleanup()
-        super().closeEvent(event)
-"""
