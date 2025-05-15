@@ -44,23 +44,7 @@ from dcmqtreepy.mainwindow import Ui_MainWindow
 from dcmqtreepy.new_privates import new_private_dictionaries
 from dcmqtreepy.qt_assistant_launcher import HelpAssistant
 
-# Set up logging to file
-user_home = Path.home()
-log_path = user_home / "Library" / "Logs" / "dcmQTreePy"
-log_path.mkdir(parents=True, exist_ok=True)
-log_file = log_path / "dcmQTreePy.log"
-
-# Configure root logger
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler(),  # Keep console output as well
-    ],
-)
 logger = logging.getLogger(__name__)
-logger.info(f"Logging to {log_file}")
 
 
 def resource_path(relative_path):
@@ -497,6 +481,8 @@ class DCMQtreePy(QMainWindow):
             print(f"Column {column} is not editable")
 
     def on_view_image(self):
+        if not self.current_list_item:
+            return
         file_path = self.current_list_item.text()
         self.image_viewer.dicom_handler.load_file(file_path)
         # Display the image
@@ -889,4 +875,21 @@ def main():
 
 
 if __name__ == "__main__":
+    # Set up logging to file
+    user_home = Path.home()
+    log_path = user_home / "Library" / "Logs" / "dcmQTreePy"
+    log_path.mkdir(parents=True, exist_ok=True)
+    log_file = log_path / "dcmQTreePy.log"
+
+    # Configure root logger
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(),  # Keep console output as well
+        ],
+    )
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging to {log_file}")
     main()
