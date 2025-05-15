@@ -64,8 +64,7 @@ jobs:
 
     - name: Install dependencies with Poetry
       run: |
-        poetry install
-        poetry add pyinstaller
+        poetry install --with=dev
 
     - name: Verify Qt Assistant installation
       run: |
@@ -121,7 +120,8 @@ jobs:
       run: |
         poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help;help" --add-binary="$env:ASSISTANT_PATH;." dcmqtreepy/dcmQTree.py
 
-    - name: Create distribution package
+    - name: Create distribution package (macOS/Linux)
+      if: matrix.os != 'windows-latest'
       run: |
         mkdir dist-package
         if [ "${{ matrix.os }}" = "macos-latest" ]; then
@@ -132,12 +132,16 @@ jobs:
           cp -r dist/dcmQTreePy dist-package/
           # Create a tarball for Linux
           tar -czvf dist/dcmQTreePy-linux.tar.gz -C dist-package .
-        elif [ "${{ matrix.os }}" = "windows-latest" ]; then
-          cp -r dist/dcmQTreePy dist-package/
-          # Create a ZIP file for Windows
-          Compress-Archive -Path dist-package/* -DestinationPath dist/dcmQTreePy-windows.zip
         fi
       shell: bash
+
+    - name: Create distribution package (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        mkdir dist-package
+        cp -r dist/dcmQTreePy dist-package/
+        Compress-Archive -Path dist-package/* -DestinationPath dist/dcmQTreePy-windows.zip
+      shell: pwsh
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
