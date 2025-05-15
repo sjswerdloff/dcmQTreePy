@@ -228,9 +228,7 @@ class DCMQtreePy(QMainWindow):
         self.current_menu_action = action
         self.logger.debug(f"Current menu action: {action.text()}")
 
-        # Also update help_id if available
-        help_id = action.property("help_id")
-        if help_id:
+        if help_id := action.property("help_id"):
             self.logger.debug(f"Action has help_id: {help_id}")
 
     def _populate_tree_widget_item_from_element(self, parent: QTreeWidgetItem | QTreeWidget, elem: DataElement):
@@ -287,9 +285,7 @@ class DCMQtreePy(QMainWindow):
                 tree_child_item.setText(1, elem.name)
                 tree_child_item.setText(3, str(elem.VR))
                 tree_child_item.setText(4, elem.keyword)
-                seq_item_count = 0
-                for seq_item in elem:
-                    seq_item_count += 1
+                for seq_item_count, seq_item in enumerate(elem, start=1):
                     seq_child_item = QTreeWidgetItem(tree_child_item)
                     seq_child_item.setText(0, str(elem.tag))
                     seq_child_item.setText(1, elem.name)
@@ -423,7 +419,7 @@ class DCMQtreePy(QMainWindow):
 
     def _convert_text_lines_to_vr_values(self, text_lines: str, vr_as_string: str) -> list:
         text_list = text_lines.splitlines()
-        cast_values = list()
+        cast_values = []
         for value_as_string in text_list:
             try:
                 cast_value = value_as_string
@@ -438,7 +434,7 @@ class DCMQtreePy(QMainWindow):
                     cast_value = None
             except Exception:
                 logging.error(f"Failed in casting {value_as_string} to VR of {vr_as_string}")
-                return list()
+                return []
             cast_values.append(cast_value)
         return cast_values
 
@@ -449,10 +445,7 @@ class DCMQtreePy(QMainWindow):
         return (int(group, 16), int(elem_hex_as_string, 16))
 
     def _isEditable(self, column: int) -> bool:
-        if column == 2:
-            return True
-        else:
-            return False
+        return column == 2
 
     def on_item_selection_changed(self):
         if self.reverting_list_item:
@@ -483,17 +476,21 @@ class DCMQtreePy(QMainWindow):
     def on_view_image(self):
         if not self.current_list_item:
             return
-        file_path = self.current_list_item.text()
-        self.image_viewer.dicom_handler.load_file(file_path)
-        # Display the image
-        self.image_viewer.display_dicom_image()
+        try:
+            file_path = self.current_list_item.text()
+            self.image_viewer.dicom_handler.load_file(file_path)
+            # Display the image
+            self.image_viewer.display_dicom_image()
 
-        # Display metadata
-        self.image_viewer.display_metadata()
+            # Display metadata
+            self.image_viewer.display_metadata()
 
-        # Update status bar
-        self.image_viewer.statusBar().showMessage(f"Loaded {file_path}")
-        self.image_viewer.show()
+            # Update status bar
+            self.image_viewer.statusBar().showMessage(f"Loaded {file_path}")
+            self.image_viewer.show()
+        except Exception as e:
+            logging.error(f"Failed to load or display DICOM image {file_path}: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Could not load DICOM image:\n{e}")
 
     def on_file_open(self):
         previous_path = self.previous_path
@@ -761,11 +758,8 @@ class DCMQtreePy(QMainWindow):
             # Instead of directly calling show_context_help, check if a menu is active
             menu_widget = QApplication.activePopupWidget()
             if menu_widget and isinstance(menu_widget, QMenu):
-                # A menu is active, handle menu-specific context help
-                action = menu_widget.activeAction()
-                if action:
-                    help_id = action.property("help_id")
-                    if help_id:
+                if action := menu_widget.activeAction():
+                    if help_id := action.property("help_id"):
                         self.help_assistant.show_help_topic(help_id)
                         event.accept()
                         return
@@ -801,10 +795,7 @@ class DCMQtreePy(QMainWindow):
         Display context-sensitive help based on the currently focused widget.
         Traverses the widget hierarchy to find the nearest widget with help context.
         """
-        # Determine the current context and show appropriate help
-        # First check for active popup menus
-        active_popup = QApplication.activePopupWidget()
-        if active_popup:
+        if active_popup := QApplication.activePopupWidget():
             self.logger.debug(f"Active popup: {active_popup.__class__.__name__}")
 
             # Handle QMenu popups specially
@@ -816,8 +807,7 @@ class DCMQtreePy(QMainWindow):
                     self.help_assistant.show_help_topic(help_id)
                     return
 
-        current_widget = QApplication.focusWidget()
-        if current_widget:
+        if current_widget := QApplication.focusWidget():
             property_value, widget_with_help = self.find_help_id_widget(current_widget)
             if property_value is not None:
                 self.logger.debug(f"help_id for {widget_with_help} is {property_value}")
@@ -847,7 +837,7 @@ class DCMQtreePy(QMainWindow):
             print(f"Checking {current.__class__.__name__} named '{current.objectName()}' - help_id: {help_id}")
 
             # If we're in a menu or menu bar system
-            if isinstance(current, QMenu) or isinstance(current, QMenuBar):
+            if isinstance(current, (QMenu, QMenuBar)):
                 for action in current.actions():
                     action_help_id = action.property("help_id")
                     print(f"  Menu action '{action.text()}' - help_id: {action_help_id}")
