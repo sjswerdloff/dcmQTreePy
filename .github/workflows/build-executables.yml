@@ -55,10 +55,12 @@ jobs:
         sudo apt-get install -y qt6-tools-dev qt6-documentation-tools qt6-base-dev
         echo "ASSISTANT_PATH=$(find /usr -name assistant -type f | grep -v Assistant.app | head -n 1)" >> $GITHUB_ENV
 
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+
     - name: Find Qt Assistant (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        choco install aqt -y --no-progress
         $assistantPath = Get-ChildItem -Path "C:\" -Recurse -Filter "assistant.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*Qt6*" } | Select-Object -First 1 -ExpandProperty FullName
         echo "ASSISTANT_PATH=$assistantPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
