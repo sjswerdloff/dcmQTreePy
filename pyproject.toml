@@ -13,6 +13,7 @@ pydicom = "^2.4.4"
 pynetdicom = "^2.1.0"
 tomli = "^2.0.1"
 streamlit = "^1.42.2"
+dcm-mini-viewer = {git = "https://github.com/sjswerdloff/dcm-mini-viewer.git", rev = "main"}
 
 [tool.poetry.group.dev.dependencies]
 isort = "^5.13.2"

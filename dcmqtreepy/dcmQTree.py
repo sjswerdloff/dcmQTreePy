@@ -2,33 +2,28 @@
 # This Python file uses the following encoding: utf-8
 import atexit
 import logging
+import os
 import sys
-from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import List
 
-import pydicom
 import pydicom.config
 import pydicom.datadict
 import pydicom.dataset
-import pydicom.valuerep
-import tomli
+from dcm_mini_viewer.config.preferences_manager import (
+    PreferencesManager as MiniViewerPrefs,
+)
+from dcm_mini_viewer.main import MainWindow as DcmMiniViewer
 from pydicom import DataElement, Dataset, Sequence, dcmread, dcmwrite
 from pydicom.valuerep import VR
 from pynetdicom.presentation import build_context
-from PySide6.QtCore import (  # pylint: disable=no-name-in-module
-    QDateTime,
-    QEvent,
-    Qt,
-    Slot,
-)
-from PySide6.QtGui import QAction, QActionEvent, QKeyEvent, QKeySequence, QShortcut
+
+# pylint: disable=no-name-in-module
+from PySide6.QtCore import QEvent, Qt, Slot
+from PySide6.QtGui import QAction, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
     QApplication,
     QFileDialog,
-    QHeaderView,
-    QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMenu,
@@ -38,10 +33,8 @@ from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
     QTreeWidgetItem,
     QTreeWidgetItemIterator,
     QWhatsThis,
-    QWidget,
 )
 
-from dcmqtreepy import impac_privates
 from dcmqtreepy.add_private_element_dialog import AddPrivateElementDialog
 from dcmqtreepy.add_public_element_dialog import AddPublicElementDialog
 from dcmqtreepy.import_hex_legible_private_element_lists import (
@@ -50,6 +43,35 @@ from dcmqtreepy.import_hex_legible_private_element_lists import (
 from dcmqtreepy.mainwindow import Ui_MainWindow
 from dcmqtreepy.new_privates import new_private_dictionaries
 from dcmqtreepy.qt_assistant_launcher import HelpAssistant
+
+# Set up logging to file
+user_home = Path.home()
+log_path = user_home / "Library" / "Logs" / "dcmQTreePy"
+log_path.mkdir(parents=True, exist_ok=True)
+log_file = log_path / "dcmQTreePy.log"
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler(),  # Keep console output as well
+    ],
+)
+logger = logging.getLogger(__name__)
+logger.info(f"Logging to {log_file}")
+
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 
 class DCMQtreePy(QMainWindow):
@@ -86,6 +108,7 @@ class DCMQtreePy(QMainWindow):
         self.ui.actionAdd_Private_Element.triggered.connect(self.on_add_private_element)
         self.ui.actionDelete.triggered.connect(self.handle_file_list_delete_pressed)
         self.ui.actionDelete_Element.triggered.connect(self.handle_tree_delete_pressed)
+        self.ui.actionView_Image.triggered.connect(self.on_view_image)
         self.previous_path = Path().home()
         self.previous_save_path = Path().home()
         self.current_list_item = None
@@ -121,7 +144,7 @@ class DCMQtreePy(QMainWindow):
         QApplication.instance().installEventFilter(self)
 
         self.help_assistant = HelpAssistant(self)
-        self.help_assistant.setup_assistant("help/dcmqtreepy-qhcp.qhc")
+        self.help_assistant.setup_assistant(resource_path("help/dcmqtreepy-qhcp.qhc"))
         # Register cleanup with atexit
         atexit.register(self.help_assistant.cleanup)
 
@@ -158,6 +181,9 @@ class DCMQtreePy(QMainWindow):
         #     action.hovered.connect(lambda act=action: self.track_menu_action(act))
         # Set up context-sensitive help for menu actions
         self.setup_action_help()
+        self.image_viewer_prefs = MiniViewerPrefs()
+        self.image_viewer_prefs.initialize()
+        self.image_viewer = DcmMiniViewer(self.image_viewer_prefs)
 
     def setup_action_help(self):
         """Set up context-sensitive help for all menu actions"""
@@ -469,6 +495,19 @@ class DCMQtreePy(QMainWindow):
             self.dcm_tree_widget.editItem(item, column)
         else:
             print(f"Column {column} is not editable")
+
+    def on_view_image(self):
+        file_path = self.current_list_item.text()
+        self.image_viewer.dicom_handler.load_file(file_path)
+        # Display the image
+        self.image_viewer.display_dicom_image()
+
+        # Display metadata
+        self.image_viewer.display_metadata()
+
+        # Update status bar
+        self.image_viewer.statusBar().showMessage(f"Loaded {file_path}")
+        self.image_viewer.show()
 
     def on_file_open(self):
         previous_path = self.previous_path
