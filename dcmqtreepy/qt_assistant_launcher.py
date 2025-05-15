@@ -292,12 +292,14 @@ class HelpAssistant(QObject):
                             )
                         except Exception as e2:
                             # If both fail, try to find the process
+                            logger.warning(f"Failed to activate Assistant window using AppleScript: {str(e2)}")
                             try:
                                 subprocess.run(
                                     [
                                         "osascript",
                                         "-e",
-                                        f'tell application "System Events" to set frontmost of every process whose name contains "assistant" to true',
+                                        'tell application "System Events" '
+                                        'to set front-most of every process whose name contains "assistant" to true',
                                     ],
                                     capture_output=True,
                                     text=True,
