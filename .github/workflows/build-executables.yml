@@ -7,22 +7,22 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-latest]  # , macos-latest, ubuntu-latest]
         include:
           - os: windows-latest
             platform-name: windows
             asset-name: dcmQTreePy-windows
             path-sep: ";"
 
-          - os: macos-latest
-            platform-name: macos
-            asset-name: dcmQTreePy-macos
-            path-sep: ":"
+          # - os: macos-latest
+          #   platform-name: macos
+          #   asset-name: dcmQTreePy-macos
+          #   path-sep: ":"
 
-          - os: ubuntu-latest
-            platform-name: ubuntu
-            asset-name: dcmQTreePy-ubuntu
-            path-sep: ":"
+          # - os: ubuntu-latest
+          #   platform-name: ubuntu
+          #   asset-name: dcmQTreePy-ubuntu
+          #   path-sep: ":"
 
     runs-on: ${{ matrix.os }}
 
@@ -108,16 +108,16 @@ jobs:
     #     fi
     #   shell: bash
 
-    - name: Build with PyInstaller (macOS)
-      if: matrix.os == 'macos-latest'
-      run: |
-        # poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help:help" --add-binary="${ASSISTANT_PATH}:." dcmqtreepy/dcmQTree.py
-        poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help:help" dcmqtreepy/dcmQTree.py
+    # - name: Build with PyInstaller (macOS)
+    #   if: matrix.os == 'macos-latest'
+    #   run: |
+    #     # poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help:help" --add-binary="${ASSISTANT_PATH}:." dcmqtreepy/dcmQTree.py
+    #     poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help:help" dcmqtreepy/dcmQTree.py
 
-    - name: Build with PyInstaller (Ubuntu)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help:help" dcmqtreepy/dcmQTree.py
+    # - name: Build with PyInstaller (Ubuntu)
+    #   if: matrix.os == 'ubuntu-latest'
+    #   run: |
+    #     poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help:help" dcmqtreepy/dcmQTree.py
 
     - name: Build with PyInstaller (Windows)
       if: matrix.os == 'windows-latest'
@@ -125,20 +125,20 @@ jobs:
       run: |
         poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help;help" dcmqtreepy/dcmQTree.py
 
-    - name: Create distribution package (macOS/Linux)
-      if: matrix.os != 'windows-latest'
-      run: |
-        mkdir dist-package
-        if [ "${{ matrix.os }}" = "macos-latest" ]; then
-          cp -r dist/dcmQTreePy.app dist-package/
-          # Create a DMG file for easier distribution
-          hdiutil create -volname dcmQTreePy -srcfolder dist-package -ov -format UDZO dist/dcmQTreePy.dmg
-        elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-          cp -r dist/dcmQTreePy dist-package/
-          # Create a tarball for Linux
-          tar -czvf dist/dcmQTreePy-linux.tar.gz -C dist-package .
-        fi
-      shell: bash
+    # - name: Create distribution package (macOS/Linux)
+    #   if: matrix.os != 'windows-latest'
+    #   run: |
+    #     mkdir dist-package
+    #     if [ "${{ matrix.os }}" = "macos-latest" ]; then
+    #       cp -r dist/dcmQTreePy.app dist-package/
+    #       # Create a DMG file for easier distribution
+    #       hdiutil create -volname dcmQTreePy -srcfolder dist-package -ov -format UDZO dist/dcmQTreePy.dmg
+    #     elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+    #       cp -r dist/dcmQTreePy dist-package/
+    #       # Create a tarball for Linux
+    #       tar -czvf dist/dcmQTreePy-linux.tar.gz -C dist-package .
+    #     fi
+    #   shell: bash
 
     - name: Create distribution package (Windows)
       if: matrix.os == 'windows-latest'
@@ -162,8 +162,8 @@ jobs:
         name: Release ${{ github.run_number }}
         draft: true
         files: |
-          dist/dcmQTreePy.dmg
-          dist/dcmQTreePy-linux.tar.gz
+          # dist/dcmQTreePy.dmg
+          # dist/dcmQTreePy-linux.tar.gz
           dist/dcmQTreePy-windows.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
