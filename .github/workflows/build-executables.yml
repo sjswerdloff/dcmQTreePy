@@ -144,9 +144,7 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        New-Item -Path "dist-package" -ItemType Directory -Force
-        Copy-Item -Path "dist/dcmQTreePy" -Destination "dist-package/" -Recurse
-        Compress-Archive -Path "dist-package/*" -DestinationPath "dist/dcmQTreePy-windows.zip"
+        Compress-Archive -Path "dist/dcmQTreePy.exe" -DestinationPath "dist/dcmQTreePy-windows.zip" -Force
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
