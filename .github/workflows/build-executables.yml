@@ -140,12 +140,12 @@ jobs:
     #     fi
     #   shell: bash
 
-    - name: Create distribution package (Windows)
-      if: matrix.os == 'windows-latest'
-      shell: pwsh
-      run: |
-        Compress-Archive -Path "dist/dcmQTreePy.exe" -DestinationPath "dist/dcmQTreePy-windows.zip" -Force
-        Remove-Item -Path "dist/dcmQTreePy.exe" -Force
+    # - name: Create distribution package (Windows)
+    #   if: matrix.os == 'windows-latest'
+    #   shell: pwsh
+    #   run: |
+    #     Compress-Archive -Path "dist/dcmQTreePy.exe" -DestinationPath "dist/dcmQTreePy-windows.zip" -Force
+    #     Remove-Item -Path "dist/dcmQTreePy.exe" -Force
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
