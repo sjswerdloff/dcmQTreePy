@@ -3,6 +3,9 @@ name: Build Executables
 on:
   workflow_dispatch:  # Manual trigger
 
+permissions:
+  contents: write  # This allows creating releases and tags
+
 jobs:
   build:
     strategy:
