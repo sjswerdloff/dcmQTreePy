@@ -868,9 +868,9 @@ def main():
 if __name__ == "__main__":
     # Set up logging to file
     user_home = Path.home()
-    log_path = platformdirs.user_log_dir("dcmQTreePy")  # user_home / "Library" / "Logs" / "dcmQTreePy"
-    log_path.mkdir(parents=True, exist_ok=True)
-    log_file = log_path / "dcmQTreePy.log"
+    log_path = Path(platformdirs.user_log_dir("dcmQTreePy"))  # user_home / "Library" / "Logs" / "dcmQTreePy"
+    Path(log_path).mkdir(parents=True, exist_ok=True)
+    log_file = log_path.joinpath("dcmQTreePy.log")
 
     # Configure root logger
     logging.basicConfig(
