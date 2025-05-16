@@ -145,6 +145,7 @@ jobs:
       shell: pwsh
       run: |
         Compress-Archive -Path "dist/dcmQTreePy.exe" -DestinationPath "dist/dcmQTreePy-windows.zip" -Force
+        Remove-Item -Path "dist/dcmQTreePy.exe" -Force
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
