@@ -161,8 +161,7 @@ jobs:
         name: Release ${{ github.run_number }}
         draft: true
         files: |
-          # dist/dcmQTreePy.dmg
-          # dist/dcmQTreePy-linux.tar.gz
-          dist/dcmQTreePy-windows.zip
+          dist/dcmQTreePy.exe
+
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
