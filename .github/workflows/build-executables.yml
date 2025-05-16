@@ -65,6 +65,7 @@ jobs:
     #     echo "ASSISTANT_PATH=$assistantPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Install dependencies with Poetry
+      shell: bash
       run: |
         poetry install --with=dev
 
@@ -120,6 +121,7 @@ jobs:
 
     - name: Build with PyInstaller (Windows)
       if: matrix.os == 'windows-latest'
+      shell: bash
       run: |
         poetry run pyinstaller --name=dcmQTreePy --windowed --icon=help/icons/app_icon.png --add-data="help;help" dcmqtreepy/dcmQTree.py
 
@@ -142,10 +144,9 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        mkdir dist-package
-        cp -r dist/dcmQTreePy dist-package/
-        Compress-Archive -Path dist-package/* -DestinationPath dist/dcmQTreePy-windows.zip
-
+        New-Item -Path "dist-package" -ItemType Directory -Force
+        Copy-Item -Path "dist/dcmQTreePy" -Destination "dist-package/" -Recurse
+        Compress-Archive -Path "dist-package/*" -DestinationPath "dist/dcmQTreePy-windows.zip"
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
