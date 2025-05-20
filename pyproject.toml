@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "dcmqtreepy"
-version = "0.3.0"
+version = "0.3.1"
 description = "A PySide6 and pydicom based DICOM object editor"
 authors = ["Stuart Swerdloff <sjswerdloff@gmail.com>"]
 license = "Apache2"
