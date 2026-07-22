@@ -18,8 +18,8 @@ dcm-mini-viewer = {git = "https://github.com/sjswerdloff/dcm-mini-viewer.git", r
 [tool.poetry.group.dev.dependencies]
 isort = "^5.13.2"
 flake8 = "^7.1.0"
-black = "^24.4.2"
-pytest = "^8.2.2"
+black = ">=24.4.2,<27.0.0"
+pytest = ">=8.2.2,<10.0.0"
 pre-commit = "^3.7.1"
 pyinstaller = "^6.13"
 
