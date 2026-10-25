@@ -38,8 +38,11 @@ data — one cause at a time, verified against real files.
   closing-keyword gate itself lives in mirror-tools' `push_up.sh`, not in a
   repo hook — absence of a local gate is not permission.)
 - **CI split:** macOS runs on Gitea (`.gitea/workflows/`), Linux on GitHub
-  (`.github/workflows/`), as separate workflows. Each forge ignores the
-  other's directory; a Linux-only workflow queued on Gitea waits forever.
+  (`.github/workflows/`), as separate workflows (Stuart's split, recorded by
+  Connor on #1). Without `.gitea/workflows/`, Gitea picks up
+  `.github/workflows/` and runs the same Linux CI on both forges — the split
+  exists so CI is not duplicated. Incident reports and runner logs belong on
+  the PR or the issue, not in this file.
 
 ## Stack and layout
 
@@ -48,10 +51,11 @@ data — one cause at a time, verified against real files.
 - `dcmqtreepy/mainwindow.py` and `dcmqtreepy/ui_*.py` — **generated** from
   `*.ui` (Qt Designer: `DICOMQTreeEditor.pyproject`). **Do not hand-edit**
   generated files; edit the `.ui` and regenerate.
-- Private-dictionary tooling (`impac_privates.py`, `new_privates.py`,
-  `import_hex_legible_private_element_lists.py`) generates dictionaries
-  pydicom consumes — output changes are **data migrations**: parity-check
-  them, review like a dictionary migration.
+- Private-tag dictionaries (`impac_privates.py`, `new_privates.py`) are
+  **data consumed by pydicom**; `import_hex_legible_private_element_lists.py`
+  is the generator that produces such dictionaries. Any change to the data
+  files is a **data migration**: parity-check it, review it like a dictionary
+  migration. (Connor, review of #7 — only the third file is a generator.)
 - `help/` documentation; `sample_privates.json` is safe sample data,
   `local_privates.json` is user data — never commit edits to it.
 
