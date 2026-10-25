@@ -7,13 +7,23 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
+# Single-source pins (uv migration parity, issue #1): every resolved version in
+# this table matches poetry.lock at main b8481c6 exactly. uv's free resolution
+# drifts (see PR body table); this file re-straightens it. Bumps belong in #4,
+# deliberately, one cause at a time. Medical repo: lockfile churn = behaviour churn.
 dependencies = [
-    "PySide6>=6.7.2,<7",
-    "pydicom>=2.4.4,<3",
-    "pynetdicom>=2.1.0,<3",
+    "PySide6==6.8.3",
+    "pydicom==2.4.4",
+    "pynetdicom==2.1.1",
     "tomli>=2.0.1,<3",
-    "streamlit>=1.42.2,<2",
+    "streamlit==1.45.1",
     "dcm-mini-viewer",
+    # transitive numeric pins — match poetry.lock resolved at main b8481c6
+    "numpy==2.2.6",
+    "pandas==2.2.3",
+    "pyarrow==20.0.0",
+    "protobuf==6.31.0",
+    "pillow==11.2.1",
 ]
 
 [project.scripts]
