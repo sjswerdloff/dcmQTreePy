@@ -1,7 +1,7 @@
 import logging
 import os
 import sys
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QProcess
 from PySide6.QtWidgets import QMessageBox
@@ -47,10 +47,10 @@ class HelpAssistant(QObject):
         "file_list": "interface-help.html",
     }
 
-    def __init__(self, parent: Optional[QObject] = None) -> None:
+    def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self.assistant_process: Optional[QProcess] = None
-        self.help_collection: Optional[str] = None  # Path to .qhc file
+        self.assistant_process: QProcess | None = None
+        self.help_collection: str | None = None  # Path to .qhc file
 
     def _platform_key(self) -> str:
         """

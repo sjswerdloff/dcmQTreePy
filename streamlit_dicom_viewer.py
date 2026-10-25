@@ -1,11 +1,8 @@
 import logging
-import os
-from pathlib import Path
-from typing import Dict, List, Optional, Union
 
 import pydicom
 import streamlit as st
-from pydicom import DataElement, Dataset, Sequence
+from pydicom import DataElement, Dataset
 from pydicom.valuerep import VR
 
 
@@ -52,7 +49,7 @@ def load_private_dictionaries():
         logging.warning(f"Could not load private dictionaries: {e}")
 
 
-def format_dicom_element(elem: DataElement) -> Optional[Dict]:
+def format_dicom_element(elem: DataElement) -> dict | None:
     """Format a DICOM element for display."""
     if elem.VR == VR.SQ:
         return None
@@ -154,7 +151,7 @@ def display_sequence(elem: DataElement, path: str, level: int = 0) -> None:
                     display_dataset(item, item_path, level + 2)
 
 
-def get_selected_dataset() -> Optional[Union[Dataset, DataElement]]:
+def get_selected_dataset() -> Dataset | DataElement | None:
     """Get currently selected dataset or sequence item."""
     selected_path = None
 
@@ -426,7 +423,6 @@ def main():
         if selected_file:
             if get_state("modified", "", False) and not st.warning("You have unsaved changes. Do you want to continue?"):
                 return
-
 
             try:
                 dataset = pydicom.dcmread(selected_file, force=True)

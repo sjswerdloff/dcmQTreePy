@@ -1,9 +1,5 @@
 """Unit tests for import_hex_legible_private_element_lists.py"""
 
-import json
-
-import pytest
-
 from dcmqtreepy.import_hex_legible_private_element_lists import (
     _filter_creators,
     _pydicom_private_dicts_from_json,
