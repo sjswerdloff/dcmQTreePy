@@ -15,7 +15,7 @@ dependencies = [
     "PySide6==6.8.3",
     "pydicom==2.4.4",
     "pynetdicom==2.1.1",
-    "tomli>=2.0.1,<3",
+    "tomli==2.2.1",
     "streamlit==1.45.1",
     "dcm-mini-viewer",
     # transitive numeric pins — match poetry.lock resolved at main b8481c6
