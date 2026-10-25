@@ -1,8 +1,9 @@
 """Public Element dialog
 
-    Returns:
-        _type_: _description_
+Returns:
+    _type_: _description_
 """
+
 import logging
 
 from pydicom import DataElement, datadict

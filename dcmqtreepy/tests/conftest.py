@@ -104,14 +104,14 @@ def assert_valid_tag_format():
         private_element = element & 0x00FF
 
         # Most private elements should have creator blocks between 0x10 and 0xFF
-        assert (
-            0x10 <= private_creator_block <= 0xFF or private_creator_block == 0x00
-        ), f"Tag {hex(tag)} in {vendor or 'dictionary'} has unusual private creator block {private_creator_block:02X}"
+        assert 0x10 <= private_creator_block <= 0xFF or private_creator_block == 0x00, (
+            f"Tag {hex(tag)} in {vendor or 'dictionary'} has unusual private creator block {private_creator_block:02X}"
+        )
 
         # Private elements should be between 0x00 and 0xFF
-        assert (
-            0x00 <= private_element <= 0xFF
-        ), f"Tag {hex(tag)} in {vendor or 'dictionary'} has unusual private element {private_element:02X}"
+        assert 0x00 <= private_element <= 0xFF, (
+            f"Tag {hex(tag)} in {vendor or 'dictionary'} has unusual private element {private_element:02X}"
+        )
 
     return _assert_valid_tag_format
 

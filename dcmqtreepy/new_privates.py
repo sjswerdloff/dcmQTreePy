@@ -1,4 +1,3 @@
-
 new_private_dictionaries: dict[str, dict[int, tuple[str, str, str, str]]] = {
     "Accuray Robotic Control": {
         0x300F1001: ("CS", "1", "Use Increased Pitch Correction", ""),  # noqa

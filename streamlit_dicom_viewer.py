@@ -424,7 +424,6 @@ def main():
             if get_state("modified", "", False) and not st.warning("You have unsaved changes. Do you want to continue?"):
                 return
 
-
             try:
                 dataset = pydicom.dcmread(selected_file, force=True)
                 st.session_state["current_dataset"] = dataset

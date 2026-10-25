@@ -115,7 +115,7 @@ def generate_python_code_from_private_dict_list(
 
 
 def jsonify_pydicom_private_dict_list(
-    pythonic_list_of_private_dicts: list[dict[str, dict[int, list]]]
+    pythonic_list_of_private_dicts: list[dict[str, dict[int, list]]],
 ) -> list[dict[str, dict[str, list]]]:
     """For conversion of an existing list of pythonic private dictionaries so that json.dump(jsonic_list_of_private_dict)
     will be of the same format as the rest of this module uses to deserialize a private dictionary from JSON.
