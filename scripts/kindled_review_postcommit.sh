@@ -41,7 +41,7 @@ kindled-review: CANONICAL HOOK NOT FOUND — review did NOT run.
   This message prints on every commit until the hook is installed.
 ==========================================================================
 EOF
-    exit 0
+    exit 1
 fi
 
 exec "$CANONICAL"
