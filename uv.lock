@@ -34,6 +34,7 @@ constraints = [
     { name = "nodeenv", specifier = "==1.9.1" },
     { name = "numpy", specifier = "==2.2.6" },
     { name = "packaging", specifier = "==24.2" },
+    { name = "pandas", specifier = "==2.2.3" },
     { name = "pefile", specifier = "==2023.2.7" },
     { name = "pillow", specifier = "==11.2.1" },
     { name = "platformdirs", specifier = "==4.3.8" },
@@ -220,6 +221,7 @@ version = "0.3.1"
 source = { editable = "." }
 dependencies = [
     { name = "dcm-mini-viewer" },
+    { name = "platformdirs" },
     { name = "pydicom" },
     { name = "pynetdicom" },
     { name = "pyside6" },
@@ -238,6 +240,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dcm-mini-viewer", git = "https://github.com/sjswerdloff/dcm-mini-viewer.git?rev=main" },
+    { name = "platformdirs", specifier = ">=4.2.0,<5" },
     { name = "pydicom", specifier = ">=2.4.4,<3" },
     { name = "pynetdicom", specifier = ">=2.1.0,<3" },
     { name = "pyside6", specifier = ">=6.7.2,<7" },
