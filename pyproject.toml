@@ -7,14 +7,13 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-# Single-source pins (uv migration parity, issue #1): every resolved version in
-# this table matches poetry.lock at main b8481c6 exactly. uv's free resolution
-# drifts (see PR body table); this file re-straightens it. Bumps belong in #4,
-# deliberately, one cause at a time. Medical repo: lockfile churn = behaviour churn.
-# #3 (Stuart, 27 Oct: Python 3.12 is the floor) moved streamlit, everything only it
-# pulls in, and the dev tooling to their latest releases, and dropped tomli (never
-# imported). The <3.13 cap and pydicom 2.4.4 stay: dcm-mini-viewer caps Python <3.13
-# and requires pydicom==2.4.4 exactly.
+# Exact versions live in [tool.uv] constraint-dependencies below, not here: the
+# declarations keep their caret meaning. Medical repo: lockfile churn = behaviour
+# churn, so every version move is deliberate and named in its PR.
+# #3 (Stuart, 27 Oct: Python 3.12 is the floor): streamlit and what only it pulls in
+# are unpinned and float to latest; the dev tooling moved to latest and is pinned;
+# tomli (never imported) is dropped. The <3.13 cap and pydicom 2.4.4 stay with
+# dcm-mini-viewer, which caps Python <3.13 and requires pydicom==2.4.4 exactly.
 dependencies = [
     "PySide6>=6.7.2,<7",
     "pydicom>=2.4.4,<3",
@@ -38,53 +37,30 @@ dev = [
     "ruff>=0.15",
 ]
 
-# Tooling-only parity with poetry.lock @ main b8481c6 (Refs #1, cora + connor).
+# Pins for everything except streamlit's own tree (#3: Stuart wants streamlit kept
+# current, so it and what only it pulls in are deliberately NOT constrained here).
 # [project].dependencies keeps Poetry's caret meaning (the declaration says what
-# the package PROMISES); these constraints, not the declaration, hold the exact
-# versions in uv.lock. uv re-resolves freely, so without constraints 40 of the 66
-# common packages drift incl runtime majors (python-dateutil 3.0, narwhals 2,
-# filelock 4, virtualenv 21, rpds-py, pyinstaller 6.22) AND the directs uv would
-# float above the caret floor (PySide6, pydicom, pynetdicom, streamlit, numpy,
-# pillow). Constraints are the ONLY place exact versions live; #4 bumps with
-# `uv lock --upgrade-package X`, no declaration churn. Intentional set-difference
-# (NOT constrained): flake8/mccabe/pycodestyle/pyflakes/black/isort/
-# mypy-extensions/pathspec leave (migrated to ruff). Majors that must move
-# (py3.13, PySide6, numpy) go in #4 deliberately.
+# the package PROMISES); these constraints hold the exact versions in uv.lock, so
+# uv's free re-resolution cannot move them. Bump with `uv lock --upgrade-package X`
+# after changing the pin here. Not constrained either: ruff (a floor in the dev
+# group) and PySide6's own sub-packages, which follow PySide6. Majors held by
+# dcm-mini-viewer's caps (py3.13, PySide6, numpy, pydicom) move in #4.
 [tool.uv]
 constraint-dependencies = [
-    "altair==6.3.0",
     "altgraph==0.17.4",
-    "anyio==4.14.2",
-    "attrs==26.1.0",
-    "certifi==2026.10.23",
     "cfgv==3.4.0",
-    "charset-normalizer==3.5.2",
-    "click==8.5.0",
     "distlib==0.3.9",
     "filelock==4.2.4",
-    "h11==0.16.0",
     "identify==2.6.10",
-    "idna==3.20",
     "iniconfig==2.3.1",
-    "itsdangerous==2.2.0",
-    "jinja2==3.1.6",
-    "jsonschema-specifications==2025.9.1",
-    "jsonschema==4.26.0",
     "macholib==1.16.3",
-    "markupsafe==3.0.4",
-    "narwhals==2.27.1",
     "nodeenv==1.9.1",
     "numpy==2.2.6",
     "packaging==24.2",
-    "pandas==3.1.0",
     "pefile==2023.2.7",
-    "pillow==13.0.0",
     "platformdirs==4.3.8",
     "pluggy==1.7.0",
     "pre-commit==4.7.0",
-    "protobuf==7.36.2",
-    "pyarrow==26.0.0",
-    "pydeck==0.9.3",
     "pydicom==2.4.4",
     "pygments==2.21.0",
     "pyinstaller-hooks-contrib==2026.9",
@@ -92,24 +68,11 @@ constraint-dependencies = [
     "pynetdicom==2.1.1",
     "PySide6==6.8.3",
     "pytest==9.1.1",
-    "python-dateutil==3.0.0",
     "python-discovery==1.6.4",
-    "python-multipart==0.0.32",
     "pyyaml==6.0.2",
-    "referencing==0.37.0",
-    "requests==2.34.2",
-    "rpds-py==2026.9.1",
     "setuptools==84.2.1",
-    "six==1.17.0",
-    "starlette==1.10.0",
-    "streamlit==1.66.1",
     "typing-extensions==4.13.2",
-    "tzdata==2026.5",
-    "urllib3==2.8.0",
-    "uvicorn==0.54.0",
     "virtualenv==21.14.5",
-    "watchdog==6.0.0",
-    "websockets==17.3",
 ]
 
 [tool.uv.sources]
