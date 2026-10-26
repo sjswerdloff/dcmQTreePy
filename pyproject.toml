@@ -6,17 +6,15 @@ authors = [{ name = "Stuart Swerdloff", email = "sjswerdloff@gmail.com" }]
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.12,<3.13"
 # Single-source pins (uv migration parity, issue #1): every resolved version in
 # this table matches poetry.lock at main b8481c6 exactly. uv's free resolution
 # drifts (see PR body table); this file re-straightens it. Bumps belong in #4,
 # deliberately, one cause at a time. Medical repo: lockfile churn = behaviour churn.
-# #3 moved the dev tooling (pytest, pre-commit, pyinstaller and what they pull) to
-# current releases that still support Python 3.10, and dropped tomli (never imported).
-# pydicom stays 2.4.4: dcm-mini-viewer pins it exactly (pydicom==2.4.4).
-# #3 also moved streamlit and everything only it pulls in to the newest releases
-# that support Python 3.10 (streamlit 1.65.0, pillow 12.3.0, pandas 2.3.3, pyarrow 25.0.1).
-# Their latest releases need Python >=3.11; raising the floor is #4's decision.
+# #3 (Stuart, 27 Oct: Python 3.12 is the floor) moved streamlit, everything only it
+# pulls in, and the dev tooling to their latest releases, and dropped tomli (never
+# imported). The <3.13 cap and pydicom 2.4.4 stay: dcm-mini-viewer caps Python <3.13
+# and requires pydicom==2.4.4 exactly.
 dependencies = [
     "PySide6>=6.7.2,<7",
     "pydicom>=2.4.4,<3",
@@ -54,7 +52,7 @@ dev = [
 # (py3.13, PySide6, numpy) go in #4 deliberately.
 [tool.uv]
 constraint-dependencies = [
-    "altair==6.2.2",
+    "altair==6.3.0",
     "altgraph==0.17.4",
     "anyio==4.14.2",
     "attrs==26.1.0",
@@ -63,13 +61,11 @@ constraint-dependencies = [
     "charset-normalizer==3.5.2",
     "click==8.5.0",
     "distlib==0.3.9",
-    "exceptiongroup==1.3.0",
-    "filelock==4.1.0",
+    "filelock==4.2.4",
     "h11==0.16.0",
-    "httptools==0.9.0",
     "identify==2.6.10",
     "idna==3.20",
-    "iniconfig==2.1.0",
+    "iniconfig==2.3.1",
     "itsdangerous==2.2.0",
     "jinja2==3.1.6",
     "jsonschema-specifications==2025.9.1",
@@ -80,14 +76,14 @@ constraint-dependencies = [
     "nodeenv==1.9.1",
     "numpy==2.2.6",
     "packaging==24.2",
-    "pandas==2.3.3",
+    "pandas==3.1.0",
     "pefile==2023.2.7",
-    "pillow==12.3.0",
+    "pillow==13.0.0",
     "platformdirs==4.3.8",
-    "pluggy==1.6.0",
-    "pre-commit==4.6.2",
+    "pluggy==1.7.0",
+    "pre-commit==4.7.0",
     "protobuf==7.36.2",
-    "pyarrow==25.0.1",
+    "pyarrow==26.0.0",
     "pydeck==0.9.3",
     "pydicom==2.4.4",
     "pygments==2.21.0",
@@ -99,24 +95,21 @@ constraint-dependencies = [
     "python-dateutil==3.0.0",
     "python-discovery==1.6.4",
     "python-multipart==0.0.32",
-    "pytz==2026.5",
     "pyyaml==6.0.2",
     "referencing==0.37.0",
     "requests==2.34.2",
-    "rpds-py==0.30.0",
+    "rpds-py==2026.9.1",
     "setuptools==84.2.1",
     "six==1.17.0",
-    "starlette==1.7.0",
-    "streamlit==1.65.0",
-    "toml==0.10.2",
-    "tomli==2.2.1",
+    "starlette==1.10.0",
+    "streamlit==1.66.1",
     "typing-extensions==4.13.2",
     "tzdata==2026.5",
     "urllib3==2.8.0",
     "uvicorn==0.54.0",
     "virtualenv==21.14.5",
     "watchdog==6.0.0",
-    "websockets==16.1.1",
+    "websockets==17.3",
 ]
 
 [tool.uv.sources]
@@ -131,7 +124,7 @@ packages = ["dcmqtreepy"]
 
 [tool.ruff]
 line-length = 127
-target-version = "py310"
+target-version = "py312"
 extend-exclude = ["dcmqtreepy/mainwindow.py", "dcmqtreepy/ui_*.py"]
 
 [tool.ruff.lint]
