@@ -39,14 +39,11 @@ data — one cause at a time, verified against real files.
   repo hook — absence of a local gate is not permission.)
 - **CI split (the goal; not yet built):** macOS is intended to run on Gitea
   (`.gitea/workflows/`) and Linux on GitHub (`.github/workflows/`) — Stuart's
-  split, recorded by Connor on #1. **Today neither forge has the split:** the
-  repo has no `.gitea/workflows/`, so Gitea runs `.github/workflows/`
-  (Linux/Windows) — macOS CI does not exist yet anywhere. On Gitea this is a
-  no-op, because the only macOS-capable runner in the family is
-  `hp-mac-mini-01`, self-hosted, which that forge has no access to. Building
-  the split needs a runner plan first (a macOS runner reachable by Gitea),
-  then a `.gitea/workflows/macos-ci.yml`. Until then this file describes the
-  real coverage, not the intention. Incident reports and runner logs belong on
+  split, recorded by Connor on #1. Gitea *has* macOS runners (other family
+  repos run `runs-on: macos-latest` there). This repo has no
+  `.gitea/workflows/` yet, so Gitea runs `.github/workflows/` and no macOS
+  CI runs for it. The split is one workflow file away; whoever adds it picks
+  the runner label — the file holds the rule, not a runner inventory. Incident reports and runner logs belong on
   the PR or the issue, not in this file.
 
 ## Stack and layout
