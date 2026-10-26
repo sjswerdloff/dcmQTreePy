@@ -14,12 +14,12 @@ git clone git@github.com:sjswerdloff/dcmQTreePy.git
 
 cd dcmQTreePy
 
-(optional) set up a virtual python environment (e.g., using Python’s built-in venv or pyenv or conda.  I use pyenv)
+Install uv (https://docs.astral.sh/uv/), then create the project environment (uv creates .venv automatically):
 
-poetry install
+uv sync --dev
 
-poetry run python dcmqtreepy/dcmQTree.py
+uv run python dcmqtreepy/dcmQTree.py
 
 or
 
-poetry run streamlit run streamlit_dicom_viewer (if you want a web based editor)
+uv run streamlit run streamlit_dicom_viewer (if you want a web based editor)

@@ -1,6 +1,6 @@
 import logging
 
-from pydicom import DataElement, Dataset, _private_dict, datadict, dataset
+from pydicom import Dataset, _private_dict, datadict
 from pydicom.valuerep import VR
 from PySide6.QtWidgets import QDialog
 

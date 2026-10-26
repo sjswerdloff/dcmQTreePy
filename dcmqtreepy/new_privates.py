@@ -1,6 +1,4 @@
-from typing import Dict, Tuple
-
-new_private_dictionaries: Dict[str, Dict[int, Tuple[str, str, str, str]]] = {
+new_private_dictionaries: dict[str, dict[int, tuple[str, str, str, str]]] = {
     "Accuray Robotic Control": {
         0x300F1001: ("CS", "1", "Use Increased Pitch Correction", ""),  # noqa
     },

@@ -2,16 +2,15 @@
 import json
 from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List
 
 
-def pydicom_private_dicts_from_json(privates_json_file: Path | str) -> Dict[str, Dict[int, List]]:
+def pydicom_private_dicts_from_json(privates_json_file: Path | str) -> dict[str, dict[int, list]]:
     unfiltered_dict = _pydicom_private_dicts_from_json(privates_json_file=privates_json_file)
     filtered_dict = _filter_creators(unfiltered_dict_of_private_dicts=unfiltered_dict)
     return filtered_dict
 
 
-def _pydicom_private_dicts_from_json(privates_json_file: Path | str) -> Dict[str, Dict[int, List]]:
+def _pydicom_private_dicts_from_json(privates_json_file: Path | str) -> dict[str, dict[int, list]]:
     """_summary_
 
     Args:
@@ -22,7 +21,7 @@ def _pydicom_private_dicts_from_json(privates_json_file: Path | str) -> Dict[str
             pydicom.datadict.add_private_dict_entries(key, value) for key,value in returned.items()
 
     """
-    with open(privates_json_file, "r") as f:
+    with open(privates_json_file) as f:
         my_list_of_privates_dict = json.load(f)
 
     my_converted_dict = dict()
@@ -37,14 +36,14 @@ def _pydicom_private_dicts_from_json(privates_json_file: Path | str) -> Dict[str
     return converted_dict_of_privates
 
 
-def _filter_creators(unfiltered_dict_of_private_dicts: Dict[str, Dict[int, List]]) -> Dict[str, Dict[int, List]]:
+def _filter_creators(unfiltered_dict_of_private_dicts: dict[str, dict[int, list]]) -> dict[str, dict[int, list]]:
     not_private_creators = []
     for creator, private_dict in unfiltered_dict_of_private_dicts.items():
         for tag in private_dict.keys():
             group = tag >> 16
             remainder = group % 2
             if remainder == 0:
-                hex_string = "{:04X}".format(group)
+                hex_string = f"{group:04X}"
                 print(f"{hex_string} is not an odd value, {creator} will be filtered out")
                 not_private_creators.append(creator)
                 break
@@ -68,7 +67,7 @@ def wrap_in_single_quotes(s: str) -> str:
 
 
 def generate_python_code_from_private_dict_list(
-    pythonic_list_of_private_dicts: List[Dict[str, Dict[int, List]]], for_pydicom_pr=False
+    pythonic_list_of_private_dicts: list[dict[str, dict[int, list]]], for_pydicom_pr=False
 ) -> str:
     python_code_lines = []
     python_code_lines.append("from typing import Dict, Tuple\n")
@@ -81,9 +80,9 @@ def generate_python_code_from_private_dict_list(
                 group = tag >> 16
                 element = tag % 65536
                 private_byte = element % 256
-                hex_tag = "0x" + "{:08X}".format(tag)
+                hex_tag = "0x" + f"{tag:08X}"
                 if for_pydicom_pr:
-                    hex_tag = "{:04X}".format(group) + "xx" + "{:02X}".format(private_byte)
+                    hex_tag = f"{group:04X}" + "xx" + f"{private_byte:02X}"
                 vr = entry[0]
                 vm = entry[1]
                 private_name = entry[2]
@@ -116,8 +115,8 @@ def generate_python_code_from_private_dict_list(
 
 
 def jsonify_pydicom_private_dict_list(
-    pythonic_list_of_private_dicts: List[Dict[str, Dict[int, List]]]
-) -> List[Dict[str, Dict[str, List]]]:
+    pythonic_list_of_private_dicts: list[dict[str, dict[int, list]]],
+) -> list[dict[str, dict[str, list]]]:
     """For conversion of an existing list of pythonic private dictionaries so that json.dump(jsonic_list_of_private_dict)
     will be of the same format as the rest of this module uses to deserialize a private dictionary from JSON.
     Probably will be a list of one, but... keeps the logic consistent and makes for easier merging of json.
@@ -134,7 +133,7 @@ def jsonify_pydicom_private_dict_list(
     for pythonic_dict_of_private_dicts in pythonic_list_of_private_dicts:
         for creator, dict_of_private_elements in pythonic_dict_of_private_dicts.items():
             for tag, entry in dict_of_private_elements.items():
-                hex_tag = "0x" + "{:08X}".format(tag)
+                hex_tag = "0x" + f"{tag:08X}"
                 my_jsonified_dict[hex_tag] = entry
             converted_dict_of_privates[creator] = my_jsonified_dict
             my_jsonified_dict = {}
@@ -158,7 +157,7 @@ if __name__ == "__main__":
                 set_diff = rs_impac_set ^ impac_set
                 set_union = rs_impac_set | impac_set
                 for key in set_union:
-                    print(f"{'{:08X}'.format(key)}")
+                    print(f"{f'{key:08X}'}")
                     if key in private_element_dictionary:
                         print(f"RS: {private_element_dictionary[key]}")
                     if key in impac_private_dict:
@@ -175,12 +174,12 @@ if __name__ == "__main__":
     for creator in converted_dict_of_privates.keys():
         converted_list_of_private_dicts.append({creator: converted_dict_of_privates[creator]})
     json_ready_merged_list_of_dicts = jsonify_pydicom_private_dict_list(converted_list_of_private_dicts)
-    with open("merged_privates.json", "wt") as f:
+    with open("merged_privates.json", "w") as f:
         json_string = json.dumps(json_ready_merged_list_of_dicts)
         f.write(json_string)
         f.flush()
         f.close()
-    with open("new_privates_fragment.py", "wt") as g:
+    with open("new_privates_fragment.py", "w") as g:
         python_string = generate_python_code_from_private_dict_list(converted_list_of_private_dicts)
         g.write(python_string)
         g.flush()
