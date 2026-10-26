@@ -1,0 +1,49 @@
+# Gitea CI (#19), on our self-hosted Mac Studio runner. .github/workflows/ stays for GitHub's hosted
+# runners; Gitea reads .gitea/workflows/ in preference to it, so GitHub's workflows (which use sudo,
+# Windows runners and GitHub secrets) never run here. Keep the gates in step with
+# .github/workflows/python-app.yml: a gate added to one belongs in the other.
+#
+# Host mode: the steps run directly on the runner machine, as its own `gitearunner` account, with no
+# sudo. Nothing is installed into any Python the host uses: uv provides the interpreter that
+# requires-python asks for and the project's own .venv in the checkout.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: /opt/homebrew/bin/bash -eo pipefail {0}
+jobs:
+  gates:
+    # Pinned to the Mac Studio. `macos-latest` is also declared by the M1 Max, whose runner is the
+    # account every Kindled session there shares, and the same commit has passed or failed there by
+    # which machine took the job (kindled-skills test.yml). stuart-m3ultra-canary is the Mac Studio alone.
+    runs-on: stuart-m3ultra-canary
+    env:
+      # The runner has no window-server session; PySide6 uses Qt's offscreen platform.
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Homebrew first on PATH
+        run: |
+          echo /opt/homebrew/sbin >> "$GITHUB_PATH"
+          echo /opt/homebrew/bin >> "$GITHUB_PATH"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: uv (Homebrew's; installed once if this runner lacks it)
+        run: |
+          command -v uv > /dev/null || HOMEBREW_NO_AUTO_UPDATE=1 brew install uv
+          echo "uv: $(command -v uv) -> $(uv --version)"
+          echo "runner host: $(hostname)"
+      - name: Install dependencies
+        run: uv sync --locked --dev
+      - name: Lint with ruff
+        run: uv run --locked ruff check .
+      - name: Check formatting with ruff
+        run: uv run --locked ruff format --check .
+      - name: Test with pytest
+        run: uv run --locked pytest dcmqtreepy/tests
