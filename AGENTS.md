@@ -37,11 +37,13 @@ data — one cause at a time, verified against real files.
   keywords (`Closes #N`) belong **only in a Gitea PR body**. (And the
   closing-keyword gate itself lives in mirror-tools' `push_up.sh`, not in a
   repo hook — absence of a local gate is not permission.)
-- **CI split:** macOS runs on Gitea (`.gitea/workflows/`), Linux on GitHub
-  (`.github/workflows/`), as separate workflows (Stuart's split, recorded by
-  Connor on #1). Without `.gitea/workflows/`, Gitea picks up
-  `.github/workflows/` and runs the same Linux CI on both forges — the split
-  exists so CI is not duplicated. Incident reports and runner logs belong on
+- **CI split (the goal; not yet built):** macOS is intended to run on Gitea
+  (`.gitea/workflows/`) and Linux on GitHub (`.github/workflows/`) — Stuart's
+  split, recorded by Connor on #1. Gitea *has* macOS runners (other family
+  repos run `runs-on: macos-latest` there). This repo has no
+  `.gitea/workflows/` yet, so Gitea runs `.github/workflows/` and no macOS
+  CI runs for it. The split is one workflow file away; whoever adds it picks
+  the runner label — the file holds the rule, not a runner inventory. Incident reports and runner logs belong on
   the PR or the issue, not in this file.
 
 ## Stack and layout
