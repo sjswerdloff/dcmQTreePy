@@ -72,7 +72,13 @@ and running `uv lock --upgrade-package X`. streamlit's tree is fixed only by
   streamlit and what only it pulls in (pandas, Pillow, pyarrow, ...) are not
   pinned, so a relock moves them; the PR doing it lists what moved.
 - **The runtime direct dependencies** (PySide6, pydicom, numpy) and the Python
-  cap (`<3.13`) move in **#4**, with dcm-mini-viewer's caps.
+  range (now 3.12-3.14, `<3.15`) move with dcm-mini-viewer's (#4, #30).
+- **PySide6 sets the minimum OS** (#31): 6.12.0's wheels exist only for macOS
+  14+, Linux glibc 2.34+ (x86_64) / 2.39+ (aarch64), and Windows x64/ARM64,
+  so that is what dcmQTreePy installs on (README "Requirements"). A lower
+  baseline means capping PySide6: 6.11.3 is the newest for macOS 13 (glibc
+  still 2.34), 6.9.3 the newest for macOS 12 and glibc 2.28. Moving PySide6
+  re-checks this; numpy 2.5.4 is looser (macOS 10.13/11, glibc 2.28).
 - **The dev tooling** (pytest, pre-commit, pyinstaller and what they pull in)
   is pinned and moved to current deliberately.
 - The `poetry.lock` parity rule from the uv migration (#1) is **retired**.
