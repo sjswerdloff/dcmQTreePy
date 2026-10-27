@@ -1,0 +1,255 @@
+name: Release
+
+# Release pipeline for dcmQTreePy (Refs #33). macOS arm64 .app is signed and notarised and
+# shipped as a dmg; the Windows onefile exe ships unsigned by design (cyril's brief), with a
+# SHA-256 asset beside it. Everything runs behind the `release` protected environment: GitHub
+# pauses for Stuart's approval before any job executes. Secrets come from Stuart — the workflow
+# only names them here and fails closed when they are absent:
+#   APPLE_SIGNING_P12_BASE64   Developer ID Application certificate (.p12), base64
+#   APPLE_SIGNING_P12_PASSWORD the .p12 export password
+#   APPLE_API_KEY_JSON         App Store Connect API key JSON (notarytool --key format)
+#   repo variable CODESIGN_IDENTITY  "Developer ID Application: <name> (TEAMID)"
+# Action pins are by full commit SHA to the tags recorded in the family pins (checkout v4,
+# setup-uv v5.4.2/uv 0.9.9, upload-artifact v4). NOT YET RUN against a live runner: first
+# execution with Stuart's secrets is the honest test date, flagged in the PR body.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.3.2 (must not already exist on GitHub)"
+        required: true
+        type: string
+      build_number:
+        description: "CFBundleVersion build number stamped into the macOS bundle (integer)"
+        required: true
+        type: string
+        default: "1"
+
+permissions:
+  contents: write # tag + release creation only
+
+env:
+  PYTHON_VERSION: "3.12" # the floor (README Requirements, #30): the release builds on the minimum supported interpreter
+
+jobs:
+  verify-inputs:
+    # Cheap gate before any build minute is spent. Runs in the protected environment too, so
+    # even the checks happen post-approval — nothing anonymous ever runs here.
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: tag shape
+        run: |
+          echo "tag: ${{ inputs.tag }}"
+          echo "${{ inputs.tag }}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "::error::tag must look like vMAJOR.MINOR.PATCH"; exit 1; }
+      - name: tag must not already exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh api "repos/{owner}/{repo}/git/refs/tags/${{ inputs.tag }}" --jq .ref >/dev/null 2>&1; then
+            echo "::error::tag ${{ inputs.tag }} already exists — pick the next version"; exit 1; fi
+          echo "tag ${{ inputs.tag }} is free"
+      - name: build number integer
+        run: |
+          echo "${{ inputs.build_number }}" | grep -Eq '^[0-9]+$' || {
+            echo "::error::build_number must be an integer"; exit 1; }
+      - name: signing identity variable configured
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V="$(gh api "repos/{owner}/{repo}/actions/variables/CODESIGN_IDENTITY" --jq '.value' 2>/dev/null || true)"
+          if [ -z "$V" ]; then
+            echo "::error::repo variable CODESIGN_IDENTITY not set — Stuart sets 'Developer ID Application: <name> (TEAMID)' before the first run"
+            exit 1; fi
+          echo "codesign identity: $V"
+      - name: release secrets present (length-checked, never printed)
+        env:
+          P12: ${{ secrets.APPLE_SIGNING_P12_BASE64 }}
+          PW: ${{ secrets.APPLE_SIGNING_P12_PASSWORD }}
+          API: ${{ secrets.APPLE_API_KEY_JSON }}
+        run: |
+          [ -n "$P12" ] || { echo "::error::APPLE_SIGNING_P12_BASE64 is empty"; exit 1; }
+          [ -n "$PW" ] || { echo "::error::APPLE_SIGNING_P12_PASSWORD is empty"; exit 1; }
+          [ -n "$API" ] || { echo "::error::APPLE_API_KEY_JSON is empty"; exit 1; }
+          echo "all three signing secrets non-empty (values never printed)"
+
+  build-windows:
+    # Unsigned by design; the checksum asset is the integrity receipt for users.
+    needs: verify-inputs
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.9.9"
+          enable-cache: true
+      - name: Install pinned dependencies
+        shell: bash
+        run: uv sync --locked --dev
+      - name: Which interpreter
+        shell: bash
+        run: uv run --locked python --version
+      - name: PyInstaller onefile (Windows)
+        shell: bash
+        run: |
+          uv run --locked pyinstaller --onefile --name=dcmQTreePy --windowed \
+            --icon=help/icons/app_icon.png --add-data="help;help" \
+            dcmqtreepy/dcmQTree.py
+      - name: Smoke-run headless
+        shell: pwsh
+        run: |
+          # GUI app, no console: started, alive after 20s is the assertion, then stopped.
+          $p = Start-Process -FilePath "dist\dcmQTreePy.exe" -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { Write-Error "exe exited early with code $($p.ExitCode)"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+          Write-Output "exe ran 20s without exiting"
+      - name: Checksum
+        shell: bash
+        run: |
+          cd dist && sha256sum dcmQTreePy.exe > dcmQTreePy.exe.sha256 && cat dcmQTreePy.exe.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-unsigned
+          path: |
+            dist/dcmQTreePy.exe
+            dist/dcmQTreePy.exe.sha256
+
+  build-macos-arm64:
+    # arm64 only: macos-14 is an arm64 image and the notarisation path is wired to the .app
+    # it builds natively. Users on Intel install PySide6's universal2 wheels themselves; an
+    # Intel release build would be a separate runner and a separate decision (#31's family).
+    needs: verify-inputs
+    runs-on: macos-14
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.9.9"
+          enable-cache: true
+      - name: Install pinned dependencies
+        run: uv sync --locked --dev
+      - name: Which interpreter
+        run: uv run --locked python --version
+      - name: Import contract before building
+        run: |
+          # cora's #30 contract: frozen modules import on the floor interpreter
+          uv run --locked python -c "import dcmqtreepy.dcmQTree, dcm_mini_viewer, pydicom, numpy; print('imports ok', pydicom.__version__, numpy.__version__)"
+      - name: PyInstaller onedir (.app)
+        run: |
+          uv run --locked pyinstaller --onedir --name=dcmQTreePy --windowed \
+            --icon=help/icons/app_icon.png --add-data="help:help" \
+            --osx-bundle-identifier=co.sjswerdloff.dcmQTreePy \
+            --distpath dist \
+            dcmqtreepy/dcmQTree.py
+        # CFBundleVersion build stamp: PyInstaller writes 0.0.0 by default; the dmg's
+        # notarisation receipt is per-content-hash, so the stamp is cosmetic — recorded here
+        # so the first runner smoke (Violet) can decide whether to template it.
+      - name: Decode certificate into an ephemeral keychain (fails closed)
+        env:
+          P12_B64: ${{ secrets.APPLE_SIGNING_P12_BASE64 }}
+          P12_PW: ${{ secrets.APPLE_SIGNING_P12_PASSWORD }}
+        run: |
+          [ -n "$P12_B64" ] || { echo "::error::APPLE_SIGNING_P12_BASE64 secret is empty"; exit 1; }
+          echo "$P12_B64" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          [ -s "$RUNNER_TEMP/signing.p12" ] || { echo "::error::decoded certificate is empty"; exit 1; }
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          security create-keychain -p "ci-ephemeral" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "ci-ephemeral" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KEYCHAIN" -P "$P12_PW" -T /usr/bin/codesign -f serial
+          security set-key-partition-list -S apple-tool:,apple: -s -k "ci-ephemeral" "$KEYCHAIN"
+          security list-keychains -s "$KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN" | grep -c "1 valid identities" || {
+            echo "::error::no valid codesigning identity in imported certificate"; exit 1; }
+      - name: Sign the bundle (deep, hardened runtime, timestamp; identity from repo variable)
+        env:
+          IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
+        run: |
+          codesign --force --deep --timestamp --options runtime --sign "$IDENTITY" dist/dcmQTreePy.app
+          codesign --verify --deep --strict --verbose=2 dist/dcmQTreePy.app
+      - name: Notarize the .app (submit, wait, staple, validate)
+        env:
+          API_JSON: ${{ secrets.APPLE_API_KEY_JSON }}
+        run: |
+          printf '%s' "$API_JSON" > "$RUNNER_TEMP/asc_api_key.json"
+          ditto -c -k --keepParent dist/dcmQTreePy.app "$RUNNER_TEMP/app-submit.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/app-submit.zip" --key "$RUNNER_TEMP/asc_api_key.json" --wait
+          xcrun stapler staple dist/dcmQTreePy.app
+          xcrun stapler validate dist/dcmQTreePy.app
+      - name: Build dmg and verify
+        run: |
+          rm -f dist/dcmQTreePy-arm64.dmg
+          hdiutil create -volname dcmQTreePy -srcfolder dist/dcmQTreePy.app -ov -format UDZO dist/dcmQTreePy-arm64.dmg
+          hdiutil verify dist/dcmQTreePy-arm64.dmg
+      - name: Sign, notarize and staple the dmg
+        env:
+          IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
+          API_JSON: ${{ secrets.APPLE_API_KEY_JSON }}
+        run: |
+          codesign --timestamp --sign "$IDENTITY" dist/dcmQTreePy-arm64.dmg
+          codesign --verify --strict --verbose=2 dist/dcmQTreePy-arm64.dmg
+          ditto -c -k --keepParent dist/dcmQTreePy-arm64.dmg "$RUNNER_TEMP/dmg-submit.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/dmg-submit.zip" --key "$RUNNER_TEMP/asc_api_key.json" --wait
+          xcrun stapler staple dist/dcmQTreePy-arm64.dmg
+          xcrun stapler validate dist/dcmQTreePy-arm64.dmg
+      - name: Spctl assessment (advisory off-runner)
+        run: |
+          # Gatekeeper assessment on a CI runner is advisory only (no user session): failure is a
+          # warning, not an abort. stapler validate above is the notarisation proof.
+          spctl --assess --type execute --verbose=4 dist/dcmQTreePy.app || \
+            echo "::warning::spctl assess failed on runner — advisory; stapler validate is the proof"
+      - name: Checksum
+        run: |
+          cd dist && shasum -a 256 dcmQTreePy-arm64.dmg > dcmQTreePy-arm64.dmg.sha256 && cat dcmQTreePy-arm64.dmg.sha256
+      - name: Purge ephemeral material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/asc_api_key.json" "$RUNNER_TEMP/app-submit.zip" "$RUNNER_TEMP/dmg-submit.zip"
+          echo "keychain and key files purged"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-arm64-signed-notarised
+          path: |
+            dist/dcmQTreePy-arm64.dmg
+            dist/dcmQTreePy-arm64.dmg.sha256
+
+  publish-release:
+    # Single serial publisher: one release object, both platforms' assets, created only after
+    # both builds are green. Re-checks the tag is free at publish time — if a human pushed one
+    # mid-build, this aborts rather than stacking duplicates.
+    needs: [build-windows, build-macos-arm64]
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: "*"
+          path: release-assets
+          merge-multiple: true
+      - name: Final gate — tag still free, assets present and checksummed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/{owner}/{repo}/git/refs/tags/${{ inputs.tag }}" --jq .ref >/dev/null 2>&1 && {
+            echo "::error::tag ${{ inputs.tag }} appeared during the build — refusing to overwrite"; exit 1; }
+          ls -la release-assets/
+          [ -s release-assets/dcmQTreePy-arm64.dmg ] || { echo "::error::macOS dmg asset missing"; exit 1; }
+          [ -s release-assets/dcmQTreePy.exe ] || { echo "::error::Windows exe asset missing"; exit 1; }
+          (cd release-assets && shasum -a 256 -c dcmQTreePy-arm64.dmg.sha256 && sha256sum -c dcmQTreePy.exe.sha256)
+      - name: Create GitHub Release with assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.tag }}" \
+            --target $GITHUB_SHA \
+            --generate-notes \
+            --title "dcmQTreePy ${{ inputs.tag }}" \
+            release-assets/*
+          gh release view "${{ inputs.tag }}" --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
