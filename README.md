@@ -40,12 +40,9 @@ The app opens and displays DICOM images in its bundled viewer (dcm_mini_viewer).
 
 Known limitations:
 
-- The syntaxes whose decoders live only in optional packages — JPEG Extended, JPEG Lossless (Non-Hierarchical, including the First-Order Prediction SV1 form), and JPEG-LS — do not render out of the box. pydicom decodes them only when extra decoder packages (such as pylibjpeg with its plugins, or GDCM) are installed, and those packages are not dependencies today.
-- JPEG Baseline renders when Pillow is present (in a source install, only via
-  streamlit; not declared; unverified in packaged builds) — except some
-  RGB-declared files, which fail with an AttributeError under pydicom 2.4.5
-  and Pillow 13 (its Pillow handler predates Pillow 13's read-only image.mode;
-  tracked in issue #40).
-- JPEG 2000 (including Lossless) is different: Pillow is chosen as the decoder when present but currently fails on signed images with an int16 OverflowError under numpy 2 (tracked in issue #39), and no other handler is installed for it.
+- The syntaxes whose decoders live only in optional packages — JPEG Lossless (Non-Hierarchical, including the First-Order Prediction SV1 form) and JPEG-LS — do not render out of the box: pydicom selects no handler for them without extra decoder packages (such as pylibjpeg with its plugins, or GDCM), and those packages are not dependencies today.
+- JPEG Baseline renders when Pillow is present (in a source install, only via streamlit; not declared; unverified in packaged builds) — except some RGB-declared files, which fail with an AttributeError under pydicom 2.4.5 and Pillow 13 (its Pillow handler predates Pillow 13's read-only image.mode; tracked in issue #40).
+- JPEG Extended is registered with Pillow too, so Pillow is chosen as its decoder — and 8-bit Extended renders — but 12-bit Extended fails in pydicom 2.4.5 with NotImplementedError (the bundled `JPEG-lossy.dcm` and `JPGExtended.dcm`, both MONOCHROME2, are the 12-bit samples).
+- JPEG 2000 (including Lossless) is different again: Pillow is chosen as the decoder when present but currently fails on signed images with an int16 OverflowError under numpy 2 (tracked in issue #39), and no other handler is installed for it.
 
 Files in non-rendering syntaxes still open for tag editing; their pixel data will not display. Stuart has accepted these limitations for now; adding compressed decoding is not planned for this release.
