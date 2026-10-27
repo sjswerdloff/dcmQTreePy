@@ -44,7 +44,8 @@ Known limitations:
 - JPEG Baseline renders when Pillow is present (in a source install, only via
   streamlit; not declared; unverified in packaged builds) — except some
   RGB-declared files, which fail with an AttributeError under pydicom 2.4.5
-  and Pillow 13 (its Pillow handler predates Pillow 13's read-only image.mode).
+  and Pillow 13 (its Pillow handler predates Pillow 13's read-only image.mode;
+  tracked in issue #40).
 - JPEG 2000 (including Lossless) is different: Pillow is chosen as the decoder when present but currently fails on signed images with an int16 OverflowError under numpy 2 (tracked in issue #39), and no other handler is installed for it.
 
 Files in non-rendering syntaxes still open for tag editing; their pixel data will not display. Stuart has accepted these limitations for now; adding compressed decoding is not planned for this release.
