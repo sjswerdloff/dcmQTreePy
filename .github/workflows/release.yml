@@ -288,10 +288,19 @@ jobs:
           echo "sample stays on the runner: $CT_SMALL"
           [ -f "$CT_SMALL" ] || { echo "::error::CT_small.dcm not found in locked venv"; exit 1; }
           ./dist/dcmQTreePy.app/Contents/MacOS/dcmQTreePy --selftest "$CT_SMALL" --platform offscreen
-          # Prove the bundle carries no test data: nothing .dcm anywhere inside, and a clean
-          # diff against the pre-smoke layout (this assert is a gate, not decoration).
-          if find "$APP" -name '*.dcm' -print | grep -q .; then
-            echo "::error::test DICOM found inside the app bundle:"; find "$APP" -name '*.dcm'; exit 1
+          # cora's round-five catch: $APP is scoped to the signing step — redeclare it
+          # HERE, and assert the bundle exists before guarding it. An empty or wrong
+          # $APP made find scan the whole workspace and pattern-match test artifacts
+          # created by the selftest's own save stage in RUNNER_TEMP — a gate that
+          # fails its own build. Guard the bundle, nothing else: no test_files data
+          # rides inside the app (PyInstaller's hook ships only charset/palettes).
+          APP="dist/dcmQTreePy.app"
+          [ -d "$APP" ] || { echo "::error::bundle $APP missing at smoke step"; exit 1; }
+          if find "$APP" -path "*test_files*" -name '*.dcm' -print | grep -q .; then
+            echo "::error::test DICOM found inside the app bundle:"; find "$APP" -path "*test_files*" -name '*.dcm'; exit 1
+          fi
+          if [ -e "$APP/Contents/MacOS/CT_small.dcm" ]; then
+            echo "::error::Contents/MacOS holds a data file — test data in the signed bundle"; exit 1
           fi
           echo "signed bundle smoke passed and bundle verified free of test data"
       - name: Notarize the .app (submit .zip, wait, staple, validate)
