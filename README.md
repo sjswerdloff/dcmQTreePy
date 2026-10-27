@@ -4,6 +4,16 @@ A multi-platform DICOM object Editor
 
 An homage to DCMTree from IMPAC &reg;
 
+Requirements:
+
+Python 3.12, 3.13 or 3.14, on one of these systems (the oldest that PySide6 6.12.0's wheels support):
+
+- macOS 14 Sonoma or later (Apple silicon or Intel)
+- Linux x86_64 with glibc 2.34 or later (for example Ubuntu 22.04, RHEL 9), or Linux aarch64 with glibc 2.39 or later (for example Ubuntu 24.04)
+- Windows, x64 or ARM64
+
+macOS 13 and older, and older Linux such as RHEL 8 or Ubuntu 20.04, cannot install it.
+
 Installation:
 
 git clone https://github.com/sjswerdloff/dcmQTreePy.git
