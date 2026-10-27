@@ -858,6 +858,15 @@ class DCMQtreePy(QMainWindow):
 
 
 def main():
+    if "--selftest" in sys.argv:
+        # Hidden CI entry point (dcmqtreepy/selftest.py): dispatch BEFORE QApplication
+        # and window construction so the packaged GUI never opens on a headless runner.
+        # Refs #33/#34 — packaged smoke: open a sample DICOM, save it byte-identical,
+        # render it in the bundled viewer, exit 0 only if every stage passed.
+        from dcmqtreepy.selftest import selftest_main
+
+        rest = [a for a in sys.argv[1:] if a != "--selftest"]
+        sys.exit(selftest_main(rest))
     app = QApplication(sys.argv)
     widget = DCMQtreePy()
     widget.show()
