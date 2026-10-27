@@ -36,6 +36,6 @@ uv run streamlit run streamlit_dicom_viewer (if you want a web based editor)
 
 Image viewing and transfer syntaxes:
 
-The app opens and displays DICOM images in its bundled viewer (dcm_mini_viewer). Uncompressed transfer syntaxes (Explicit and Implicit VR Little Endian, the overwhelmingly common case) need only numpy, which is a dependency and is included in the packaged builds.
+The app opens and displays DICOM images in its bundled viewer (dcm_mini_viewer). Uncompressed transfer syntaxes (Explicit and Implicit VR Little Endian) and RLE Lossless render out of the box: the RLE decoder ships inside pydicom and needs only numpy, which is a dependency and is included in the packaged builds.
 
-Known limitation: compressed transfer syntaxes (e.g. JPEG Baseline, JPEG 2000, JPEG-LS, RLE) are not decodable out of the box — pydicom decodes them only when extra decoder packages (such as pylibjpeg with its plugins) are installed, and those packages are not dependencies today. Files in compressed syntaxes still open for tag editing; their pixel data will not render. Closing this gap is accepted scope, not included in this release.
+Known limitation: the compressed syntaxes that depend on external codecs — JPEG Baseline, JPEG 2000 (including JPEG 2000 Lossless), and JPEG-LS — are not decodable out of the box: pydicom decodes them only when extra decoder packages (such as pylibjpeg with its plugins, or GDCM) are installed, and those packages are not dependencies today. Files in those syntaxes still open for tag editing; their pixel data will not render. Stuart has accepted this limitation for now; decoding compressed images is not planned for this release.
