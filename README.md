@@ -36,6 +36,15 @@ uv run streamlit run streamlit_dicom_viewer (if you want a web based editor)
 
 Image viewing and transfer syntaxes:
 
-The app opens and displays DICOM images in its bundled viewer (dcm_mini_viewer). Uncompressed transfer syntaxes (Explicit and Implicit VR Little Endian) and RLE Lossless render out of the box: the RLE decoder ships inside pydicom and needs only numpy, which is a dependency and is included in the packaged builds.
+The app opens and displays DICOM images in its bundled viewer (dcm_mini_viewer). Uncompressed transfer syntaxes (Explicit and Implicit VR Little Endian) and RLE Lossless render out of the box: the RLE decoder ships inside pydicom and needs nothing beyond numpy, which is a declared dependency and is included in the packaged builds. JPEG Baseline also renders whenever Pillow is present — in a source install it is, pulled in transitively by streamlit — but Pillow is not a declared dependency of this project, and whether the packaged builds include it is unverified.
 
-Known limitation: the compressed syntaxes that depend on external codecs — JPEG Extended, JPEG Lossless (Non-Hierarchical, including the First-Order Prediction SV1 form), JPEG 2000 (including Lossless), and JPEG-LS — are not decodable out of the box: pydicom decodes them only when extra decoder packages (such as pylibjpeg with its plugins, or GDCM) are installed, and those packages are not dependencies today. JPEG Baseline renders when Pillow is present — as it happens to be in the source checkout, because streamlit pulls it in — but Pillow is not a declared dependency of this project, and whether the packaged builds include it is unverified. Files in non-decodable syntaxes still open for tag editing; their pixel data will not render. Stuart has accepted this limitation for now; decoding compressed images is not planned for this release.
+Known limitations:
+
+- The syntaxes whose decoders live only in optional packages — JPEG Extended, JPEG Lossless (Non-Hierarchical, including the First-Order Prediction SV1 form), and JPEG-LS — do not render out of the box. pydicom decodes them only when extra decoder packages (such as pylibjpeg with its plugins, or GDCM) are installed, and those packages are not dependencies today.
+- JPEG Baseline renders when Pillow is present, but only if the encoder
+  declared the color space correctly (a PhotometricInterpretation of YBR_RCT):
+  some camera and DCMTK-encoded Baseline files misdeclare it as
+  MONOCHROME2/YBR_FULL_422 and fail to decode even with Pillow installed.
+- JPEG 2000 (including Lossless) is different: Pillow is chosen as the decoder when present but currently fails on signed images with an int16 OverflowError under numpy 2 (tracked in issue #39), and no other handler is installed for it.
+
+Files in non-rendering syntaxes still open for tag editing; their pixel data will not display. Stuart has accepted these limitations for now; adding compressed decoding is not planned for this release.
