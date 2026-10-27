@@ -62,10 +62,20 @@ data — one cause at a time, verified against real files.
 
 ## Versioning policy (medical)
 
-Lockfile churn is behaviour churn. The uv migration (#1) is **tooling-only**:
-pins resolve to the versions `poetry.lock` had (or the nearest that clears
-critical alerts); major upgrades happen deliberately in **#4**. Any pin that
-cannot match poetry.lock is noted **in the PR body, with why**.
+Lockfile churn is behaviour churn: every version move is deliberate and is
+named, old and new, in its PR body. Exact versions of what is pinned live
+only in `[tool.uv] constraint-dependencies`; bump one by changing its pin there
+and running `uv lock --upgrade-package X`. streamlit's tree is fixed only by
+`uv.lock`.
+
+- **streamlit's tree tracks latest** (#16, Stuart: keep streamlit current).
+  streamlit and what only it pulls in (pandas, Pillow, pyarrow, ...) are not
+  pinned, so a relock moves them; the PR doing it lists what moved.
+- **The runtime direct dependencies** (PySide6, pydicom, numpy) and the Python
+  cap (`<3.13`) move in **#4**, with dcm-mini-viewer's caps.
+- **The dev tooling** (pytest, pre-commit, pyinstaller and what they pull in)
+  is pinned and moved to current deliberately.
+- The `poetry.lock` parity rule from the uv migration (#1) is **retired**.
 
 ## Testing rules
 
