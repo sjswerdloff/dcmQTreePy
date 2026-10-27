@@ -207,16 +207,35 @@ jobs:
           security import "$RUNNER_TEMP/signing.p12" -k "$KEYCHAIN" -P "$P12_PW" -T /usr/bin/codesign -f pkcs12
           security set-key-partition-list -S apple-tool:,apple: -s -k "ci-ephemeral" "$KEYCHAIN"
           security list-keychains -s "$KEYCHAIN"
-      - name: Sign inside-out (every nested Mach-O first, then the bundle), hardened + timestamp
+      - name: Sign inside-out (every Mach-O, deepest first; then frameworks; then bundle), hardened + timestamp
+        shell: bash
         env:
           IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
         run: |
+          set -euo pipefail
           APP="dist/dcmQTreePy.app"
-          # inside-out: first the frameworks and dylibs, then any nested apps/helpers, then bundle
-          find "$APP/Contents/Frameworks" "$APP/Contents/Resources" \( -name "*.dylib" -o -name "*.so" \) -type f 2>/dev/null | while read -r BIN; do
-            codesign --force --timestamp --options runtime --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$BIN"
-          done
-          codesign --force --timestamp --options runtime --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$APP"
+          # Violet + connor, #34 round two: Qt ships as extension-less .framework binaries, so a
+          # *.dylib/*.so glob misses QtCore and friends — and a bare find|while pipe can swallow a
+          # failed sign (loop runs in a subshell; a non-zero codesign inside it never reaches the
+          # step status). Fix: collect into files and feed the loop by redirect (no pipeline, so
+          # no swallowed exit), select by Mach-O CONTENT not name, and sign in order: loose Mach-O
+          # binaries deepest-first, then each *.framework bundle deepest-first (codesign rewrites
+          # the bundle seal), then the .app itself. set -e stops the step on any failed sign.
+          LIST="$RUNNER_TEMP/macho-list"
+          find "$APP" -type f -print0 > "$LIST"
+          while IFS= read -r -d '' F; do
+            if file -b "$F" | grep -q '^Mach-O'; then
+              codesign --force --timestamp --options runtime \
+                --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$F"
+            fi
+          done < <(sort -z -r "$LIST")
+          # frameworks: sign the bundle directory itself, deepest first, after its binaries
+          while IFS= read -r -d '' FW; do
+            codesign --force --timestamp --options runtime \
+              --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$FW"
+          done < <(find "$APP" -type d -name '*.framework' -print0 | sort -z -r)
+          codesign --force --timestamp --options runtime \
+            --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$APP"
           codesign --verify --strict --deep --verbose=2 "$APP"
       - name: Notarize the .app (submit .zip, wait, staple, validate)
         env:
