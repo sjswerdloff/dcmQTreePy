@@ -41,10 +41,10 @@ The app opens and displays DICOM images in its bundled viewer (dcm_mini_viewer).
 Known limitations:
 
 - The syntaxes whose decoders live only in optional packages — JPEG Extended, JPEG Lossless (Non-Hierarchical, including the First-Order Prediction SV1 form), and JPEG-LS — do not render out of the box. pydicom decodes them only when extra decoder packages (such as pylibjpeg with its plugins, or GDCM) are installed, and those packages are not dependencies today.
-- JPEG Baseline renders when Pillow is present, but only if the encoder
-  declared the color space correctly (a PhotometricInterpretation of YBR_RCT):
-  some camera and DCMTK-encoded Baseline files misdeclare it as
-  MONOCHROME2/YBR_FULL_422 and fail to decode even with Pillow installed.
+- JPEG Baseline renders when Pillow is present (in a source install, only via
+  streamlit; not declared; unverified in packaged builds) — except some
+  RGB-declared files, which fail with an AttributeError under pydicom 2.4.5
+  and Pillow 13 (its Pillow handler predates Pillow 13's read-only image.mode).
 - JPEG 2000 (including Lossless) is different: Pillow is chosen as the decoder when present but currently fails on signed images with an int16 OverflowError under numpy 2 (tracked in issue #39), and no other handler is installed for it.
 
 Files in non-rendering syntaxes still open for tag editing; their pixel data will not display. Stuart has accepted these limitations for now; adding compressed decoding is not planned for this release.
