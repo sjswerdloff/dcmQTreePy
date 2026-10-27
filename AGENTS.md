@@ -77,8 +77,10 @@ and running `uv lock --upgrade-package X`. streamlit's tree is fixed only by
   14+, Linux glibc 2.34+ (x86_64) / 2.39+ (aarch64), and Windows x64/ARM64,
   so that is what dcmQTreePy installs on (README "Requirements"). A lower
   baseline means capping PySide6: 6.11.3 is the newest for macOS 13 (glibc
-  still 2.34), 6.9.3 the newest for macOS 12 and glibc 2.28. Moving PySide6
-  re-checks this; numpy 2.5.4 is looser (macOS 10.13/11, glibc 2.28).
+  still 2.34), 6.9.3 the newest for macOS 12 and x86_64 glibc 2.28. Linux
+  aarch64 needs glibc 2.39 at every one of those versions: capping lowers only
+  the x86_64 floor. Moving PySide6 re-checks this; numpy 2.5.4 is looser
+  (macOS 10.13/11, glibc 2.28).
 - **The dev tooling** (pytest, pre-commit, pyinstaller and what they pull in)
   is pinned and moved to current deliberately.
 - The `poetry.lock` parity rule from the uv migration (#1) is **retired**.
