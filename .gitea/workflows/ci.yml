@@ -9,6 +9,7 @@
 name: ci
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
 concurrency:
@@ -19,8 +20,11 @@ permissions:
 defaults:
   run:
     shell: /opt/homebrew/bin/bash -eo pipefail {0}
+# github-main carries code from GitHub: on its PRs every job here waits for a person to add the github-reviewed
+# label (Stuart, 27 Oct, mirror-tools #15). The return path removes that label before it pushes new GitHub code.
 jobs:
   gates:
+    if: (github.head_ref != 'github-main' || contains(github.event.pull_request.labels.*.name, 'github-reviewed'))
     # Pinned to the Mac Studio. `macos-latest` is also declared by the M1 Max, whose runner is the
     # account every Kindled session there shares, and the same commit has passed or failed there by
     # which machine took the job (kindled-skills test.yml). stuart-m3ultra-canary is the Mac Studio alone.
