@@ -6,17 +6,17 @@ authors = [{ name = "Stuart Swerdloff", email = "sjswerdloff@gmail.com" }]
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.15"
 # Exact versions live in [tool.uv] constraint-dependencies below, not here: the
 # declarations keep their caret meaning. Medical repo: lockfile churn = behaviour
 # churn, so every version move is deliberate and named in its PR.
 # #3 (Stuart, 27 Oct: Python 3.12 is the floor): streamlit and what only it pulls in
 # are unpinned and float to latest; the dev tooling moved to latest and is pinned;
-# tomli (never imported) is dropped. The <3.13 cap and pydicom 2.4.4 stay with
-# dcm-mini-viewer, which caps Python <3.13 and requires pydicom==2.4.4 exactly.
+# tomli (never imported) is dropped. #4 (dcm-mini-viewer now Python 3.12-3.14, PySide6 >=6.9,
+# pydicom >=2.4.5,<3) lifts the cap to <3.15 and moves PySide6, numpy and pydicom with it.
 dependencies = [
     "PySide6>=6.7.2,<7",
-    "pydicom>=2.4.4,<3",
+    "pydicom>=2.4.5,<3",
     "pynetdicom>=2.1.0,<3",
     "streamlit>=1.42.2,<2",
     "dcm-mini-viewer",
@@ -44,7 +44,7 @@ dev = [
 # uv's free re-resolution cannot move them. Bump with `uv lock --upgrade-package X`
 # after changing the pin here. Not constrained either: ruff (a floor in the dev
 # group) and PySide6's own sub-packages, which follow PySide6. Majors held by
-# dcm-mini-viewer's caps (py3.13, PySide6, numpy, pydicom) move in #4.
+# dcm-mini-viewer's caps (Python, PySide6, numpy, pydicom) moved in #4.
 [tool.uv]
 constraint-dependencies = [
     "altgraph==0.17.5",
@@ -55,18 +55,18 @@ constraint-dependencies = [
     "iniconfig==2.3.1",
     "macholib==1.16.4",
     "nodeenv==1.11.0",
-    "numpy==2.2.6",
+    "numpy==2.5.4",
     "packaging==26.3",
     "pefile==2024.8.26",
     "platformdirs==4.13.5",
     "pluggy==1.7.0",
     "pre-commit==4.7.0",
-    "pydicom==2.4.4",
+    "pydicom==2.4.5",
     "pygments==2.21.0",
     "pyinstaller-hooks-contrib==2026.9",
     "pyinstaller==6.22.3",
     "pynetdicom==2.1.1",
-    "PySide6==6.8.3",
+    "PySide6==6.12.0",
     "pytest==9.1.1",
     "python-discovery==1.6.4",
     "pyyaml==6.0.3",
