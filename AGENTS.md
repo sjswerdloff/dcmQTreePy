@@ -63,9 +63,10 @@ data — one cause at a time, verified against real files.
 ## Versioning policy (medical)
 
 Lockfile churn is behaviour churn: every version move is deliberate and is
-named, old and new, in its PR body. Exact versions live only in `[tool.uv]
-constraint-dependencies`; bump one by changing its pin there and running
-`uv lock --upgrade-package X`.
+named, old and new, in its PR body. Exact versions of what is pinned live
+only in `[tool.uv] constraint-dependencies`; bump one by changing its pin there
+and running `uv lock --upgrade-package X`. streamlit's tree is fixed only by
+`uv.lock`.
 
 - **streamlit's tree tracks latest** (#16, Stuart: keep streamlit current).
   streamlit and what only it pulls in (pandas, Pillow, pyarrow, ...) are not
