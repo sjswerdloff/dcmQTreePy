@@ -119,7 +119,7 @@ jobs:
       - name: PyInstaller onefile (Windows)
         shell: bash
         run: |
-          uv run --locked pyinstaller --onefile --name=dcmQTreePy --windowed \
+          uv run --locked pyinstaller --onefile --name=dcmQTreePy --windowed --disable-windowed-traceback \
             --icon=help/icons/app_icon.png --add-data="help;help" \
             dcmqtreepy/dcmQTree.py
       - name: Smoke-run headless
@@ -132,6 +132,7 @@ jobs:
           Stop-Process -Id $p.Id -Force
           Write-Output "exe ran 20s without exiting"
       - name: Deep smoke via --selftest (hidden entry point, offscreen)
+        timeout-minutes: 5
         shell: pwsh
         run: |
           # cyril's #34 blocker 2: #33 asks the packaged build to open a DICOM file, save it
@@ -146,9 +147,20 @@ jobs:
           # known save scope ("until save as is working"), which would test a promise #33 does
           # not make of CI. Save-unchanged-through-the-GUI stays a manual acceptance item
           # (Stuart's scope call, per cyril's review).
-          Copy-Item (uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')").Trim() dist\CT_small.dcm
-          $p = Start-Process -FilePath "dist\dcmQTreePy.exe" -ArgumentList "--selftest","--platform","offscreen" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Write-Error "selftest exited $($p.ExitCode) — failing stages printed as 'selftest FAIL:' in the process output"; exit 1 }
+          # cyril/cora/connor round four: the sample is passed BY PATH, never copied into
+          # dist or the bundle — Contents/MacOS holds executables only, and the bundle's
+          # pydicom data (charset_files/palettes, per the official hook) is library data,
+          # not test data; the .dcm-free-of-test_files assert below guards that line.
+          # connor's two: timeout-minutes caps a hung Start-Process at 5 instead of 360;
+          # a --windowed exe has sys.stderr == None, so the report goes to a file via
+          # --report and the step Get-Content's it (rc 2 = usage/bad sample, rc 1 =
+          # stage failure, both land in the log now).
+          $CT_SMALL = (uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')").Trim()
+          if (-not (Test-Path $CT_SMALL)) { Write-Error "CT_small.dcm not found in locked venv"; exit 1 }
+          $REPORT = Join-Path $env:RUNNER_TEMP "selftest.txt"
+          $p = Start-Process -FilePath "dist\dcmQTreePy.exe" -ArgumentList "--selftest",$CT_SMALL,"--platform","offscreen","--report",$REPORT -Wait -PassThru
+          if (Test-Path $REPORT) { Get-Content $REPORT } else { Write-Output "no report file produced at $REPORT" }
+          if ($p.ExitCode -ne 0) { Write-Error "selftest exited $($p.ExitCode) — see selftest report above"; exit 1 }
           Write-Output "packaged selftest passed: window built offscreen, CT_small.dcm opened, saved byte-identical, rendered in bundled viewer"
       - name: Checksum
         shell: bash
@@ -184,7 +196,14 @@ jobs:
           uv run --locked python -c "import dcmqtreepy.dcmQTree, dcm_mini_viewer, pydicom, numpy; print('imports ok', pydicom.__version__, numpy.__version__)"
       - name: PyInstaller onedir (.app)
         run: |
-          uv run --locked pyinstaller --onedir --name=dcmQTreePy --windowed \
+          # --disable-windowed-traceback (connor's #34): a --windowed build shows an
+          # uncaught exception in a GUI traceback dialog — on a headless runner nobody
+          # closes it and the job hangs until the 6h limit. Disabled, it exits non-zero.
+          # pydicom's test_files never enter the bundle: the official hook collects
+          # only charset_files/* + palettes/* (verified against hook-pydicom.py in the
+          # locked pyinstaller-hooks-contrib 2026.9), and the smoke passes its sample
+          # by path, so no test data is copied in anywhere.
+          uv run --locked pyinstaller --onedir --name=dcmQTreePy --windowed --disable-windowed-traceback \
             --icon=help/icons/app_icon.png --add-data="help:help" \
             --osx-bundle-identifier=co.sjswerdloff.dcmQTreePy \
             --distpath dist \
@@ -253,21 +272,28 @@ jobs:
             codesign --force --timestamp --options runtime \
               --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$FW"
           done < <(find "$APP" -type d -name '*.framework' -print0 | sort -z -r)
-          CT_SMALL="$(uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')")"
-          echo "bundling sample: $CT_SMALL"
-          [ -f "$CT_SMALL" ] || { echo "::error::CT_small.dcm not found in locked venv"; exit 1; }
-          cp "$CT_SMALL" dist/dcmQTreePy.app/Contents/MacOS/CT_small.dcm
-          [ -f dist/dcmQTreePy.app/Contents/MacOS/CT_small.dcm ] || { echo "::error::failed to copy sample into bundle"; exit 1; }
           codesign --force --timestamp --options runtime \
             --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$APP"
           codesign --verify --strict --deep --verbose=2 "$APP"
       - name: Deep smoke via --selftest (hidden entry point, signed bundle, offscreen)
+        timeout-minutes: 5
         run: |
-          # cyril's #34 blocker 2, macOS side: the SIGNED app must open a DICOM file,
-          # save it unchanged (byte comparison) and render it in the bundled viewer.
-          # Same selftest as Windows; runs against the exact bundle that gets notarised,
-          # AFTER signing, before dmg — a broken notarised artifact cannot slip past.
-          ./dist/dcmQTreePy.app/Contents/MacOS/dcmQTreePy --selftest --platform offscreen
+          # cyril's #34 blocker 2 + cora's round-four blocker: the SIGNED app must open a
+          # DICOM file, save it byte-identical and render it in the bundled viewer — but NO
+          # test data inside the user's app. The sample stays in the runner's venv and is
+          # passed BY PATH; Contents/MacOS holds executables only (Apple bundle layout), so
+          # the earlier cp into the bundle is gone. Runs AFTER signing, before dmg — the
+          # exact bundle that gets notarised is the bundle that gets tested.
+          CT_SMALL="$(uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')")"
+          echo "sample stays on the runner: $CT_SMALL"
+          [ -f "$CT_SMALL" ] || { echo "::error::CT_small.dcm not found in locked venv"; exit 1; }
+          ./dist/dcmQTreePy.app/Contents/MacOS/dcmQTreePy --selftest "$CT_SMALL" --platform offscreen
+          # Prove the bundle carries no test data: nothing .dcm anywhere inside, and a clean
+          # diff against the pre-smoke layout (this assert is a gate, not decoration).
+          if find "$APP" -name '*.dcm' -print | grep -q .; then
+            echo "::error::test DICOM found inside the app bundle:"; find "$APP" -name '*.dcm'; exit 1
+          fi
+          echo "signed bundle smoke passed and bundle verified free of test data"
       - name: Notarize the .app (submit .zip, wait, staple, validate)
         env:
           P8: ${{ secrets.APPLE_API_KEY_P8 }}

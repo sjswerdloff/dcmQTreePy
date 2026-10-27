@@ -37,11 +37,17 @@ Exit codes (no swallowed failures — CI checks the exit code directly):
   2  bad invocation (missing/unreadable input, unusable arguments)
 
 Usage (invoked by the packaged executable, invisible to GUI users):
-    dcmQTreePy --selftest [path.dcm] [--platform offscreen]
+    dcmQTreePy --selftest <path.dcm> [--platform offscreen] [--report FILE]
 
-With no path, pydicom's built-in CT_small.dcm sample is used — the same file the
-issue names. ``--platform offscreen`` selects Qt's offscreen QPA plugin so the
-headless stages work on CI runners; omit it on a machine with a display.
+CI passes the sample's path (from the runner's locked venv) and a --report file so
+the report survives a --windowed exe's missing stderr. With no path, the fallback
+search runs (dev convenience only; it fails closed with exit 2 if nothing is found).
+
+    With no path, fall back to the sample inside the pydicom package — works in dev
+    venvs; frozen builds cannot find it (proven, see _resolve_input) and exit 2,
+    which is why CI passes the path explicitly. ``--platform offscreen`` selects
+    Qt's offscreen QPA plugin so the headless stages work on CI runners; omit it on
+    a machine with a display.
 """
 
 from __future__ import annotations
@@ -53,61 +59,76 @@ import tempfile
 from pathlib import Path
 
 
-def _parse_args(argv: list[str]) -> tuple[Path | None, str | None, int]:
-    """Parse argv. Returns (dicom_path, qpa_platform, exit_code_on_usage_error)."""
+def _parse_args(argv: list[str]) -> tuple[Path | None, str | None, Path | None, int]:
+    """Parse argv. Returns (dicom_path, qpa_platform, report_path, exit_code_on_usage_error)."""
     dicom_path: Path | None = None
     qpa: str | None = None
+    report: Path | None = None
     i = 0
     while i < len(argv):
         arg = argv[i]
         if arg == "--platform":
             if i + 1 >= len(argv):
                 print("--platform requires a value (e.g. offscreen)", file=sys.stderr)
-                return None, None, 2
+                return None, None, None, 2
             qpa = argv[i + 1]
+            i += 2
+            continue
+        if arg == "--report":
+            if i + 1 >= len(argv):
+                print("--report requires a file path", file=sys.stderr)
+                return None, None, None, 2
+            report = Path(argv[i + 1])
             i += 2
             continue
         if arg.startswith("--"):
             print(f"unknown option for --selftest: {arg}", file=sys.stderr)
-            return None, None, 2
+            return None, None, None, 2
         if dicom_path is not None:
             print("only one DICOM path may be given to --selftest", file=sys.stderr)
-            return None, None, 2
+            return None, None, None, 2
         dicom_path = Path(arg)
         i += 1
-    return dicom_path, qpa, 0
+    return dicom_path, qpa, report, 0
 
 
 def _resolve_input(dicom_path: Path | None) -> Path:
-    """Default to pydicom's own CT_small.dcm sample (the file #33 names).
+    """Resolve the sample DICOM. CI passes its path explicitly; the fallbacks exist
+    for dev runs and fail closed with a message naming everything searched.
 
     Probed on this repo's locked venv AND a packaged --windowed .app built with the
-    CI's exact flags (macOS arm64, pydicom 2.4.5), BEFORE wiring, in that order:
+    CI's exact flags (macOS arm64, pydicom 2.4.5), BEFORE wiring:
 
-    1. NOT pydicom.data.get_testdata_files: pydicom's data_manager imports
-       pkg_resources (setuptools' legacy module), which uv's lock does not install —
-       the helper raises ModuleNotFoundError in this venv, dev and frozen alike.
-    2. NOT ``Path(pydicom.__file__).parent / "data" / "test_files"``: frozen
-       pydicom ships its package as a PEP 302 loader-only stub (no real __init__.py
-       on disk), so PyInstaller does not collect the data/test_files tree at all —
-       proven: the path resolves inside the .app but is_file() is false.
+    - NOT pydicom.data.get_testdata_files: pydicom's data_manager imports
+      pkg_resources (setuptools' legacy module), which uv's lock does not install —
+      the helper raises ModuleNotFoundError in this venv, dev and frozen alike.
+    - NOT ``Path(pydicom.__file__).parent / "data" / "test_files"``: frozen
+      pydicom ships its package as a PEP 302 loader-only stub (no real __init__.py
+      on disk), so PyInstaller does not collect the data/test_files tree at all —
+      proven: the path resolves inside the .app but is_file() is false.
 
-    So the bundle ships its OWN copy: the workflow copies the sample next to the
-    executable (Contents/MacOS/CT_small.dcm on macOS, dist/CT_small.dcm on Windows),
-    and that is the default probed first. Keeps setuptools and re-collected package
-    data out of the bundle while still opening pydicom's named sample.
+    So CI passes the sample's path explicitly (the workflow reads it from the locked
+    venv and hands it to --selftest as an argument). Earlier revisions copied the
+    sample next to the executable; cyril's + cora's + connor's #34 round-four
+    blocker: that shipped test data inside the signed, notarised bundle —
+    Contents/MacOS is reserved for executables. Nothing test-shaped belongs in a
+    user's app, so no default copy is made here either: with no argument and no
+    discoverable sample, this fails closed with exit 2 rather than skipping quietly.
     """
     if dicom_path is not None:
         return dicom_path
-    bundled = Path(sys.argv[0]).resolve().parent / "CT_small.dcm"
-    if bundled.is_file():
-        return bundled
+    searched = []
     import pydicom
 
-    sample = Path(pydicom.__file__).parent / "data" / "test_files" / "CT_small.dcm"
-    if not sample.is_file():
-        raise FileNotFoundError(f"no bundled CT_small.dcm next to {sys.argv[0]!r} and none at {sample}")
-    return sample
+    for base in (
+        Path(pydicom.__file__).parent / "data" / "test_files",
+        Path(__file__).resolve().parent / "data" / "test_files",
+    ):
+        sample = base / "CT_small.dcm"
+        searched.append(str(sample))
+        if sample.is_file():
+            return sample
+    raise FileNotFoundError("no --selftest path argument and no sample at: " + ", ".join(searched))
 
 
 def _save_through_writer(src: Path, out_path: Path) -> None:
@@ -124,21 +145,41 @@ def _save_through_writer(src: Path, out_path: Path) -> None:
     dcmwrite(out_path, ds, write_like_original=False)
 
 
-def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None) -> int:
-    """Open, save + byte-stability + value round trip, view. Returns process exit code."""
+def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None, report_path: Path | None = None) -> int:
+    """Open, save + byte-stability + value round trip, view. Returns process exit code.
+
+    ``report_path``: every report line is also appended there. A --windowed PyInstaller
+    exe has sys.stderr == None on Windows (connor's #34 blocker), so stdout/stderr can
+    vanish; the file gives CI a report the step can Get-Content regardless.
+    """
+    lines: list[str] = []
+
+    def report(msg: str, *, err: bool = False) -> None:
+        lines.append(msg)
+        print(msg, file=sys.stderr if err else sys.stdout)
+
+    def finish(rc: int) -> int:
+        if report_path is not None:
+            try:
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text("\n".join(lines) + f"\nexit={rc}\n", encoding="utf-8")
+            except OSError as exc:
+                print(f"selftest: could not write report {report_path}: {exc}", file=sys.stderr)
+        return rc
+
     try:
         src = _resolve_input(dicom_path)
     except Exception as exc:
-        print(f"selftest: cannot resolve input file: {exc}", file=sys.stderr)
-        return 2
+        report(f"selftest: cannot resolve input file: {exc}", err=True)
+        return finish(2)
     if not src.is_file():
-        print(f"selftest: input does not exist: {src}", file=sys.stderr)
-        return 2
+        report(f"selftest: input does not exist: {src}", err=True)
+        return finish(2)
 
     original_bytes = src.read_bytes()
     if not original_bytes:
-        print(f"selftest: input is empty: {src}", file=sys.stderr)
-        return 2
+        report(f"selftest: input is empty: {src}", err=True)
+        return finish(2)
 
     if qpa_platform:
         # Must be set before any Qt platform object is touched. The env var is the
@@ -163,7 +204,14 @@ def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None) -> in
     out_path = out_dir / src.name
     out_path2 = out_dir / f"second-{src.name}"
 
-    widget = DCMQtreePy()
+    try:
+        widget = DCMQtreePy()
+    except BaseException as exc:
+        # connor's blocker: window construction is the exact place an uncollected
+        # module surfaces; catch it here so it prints and exits 1 instead of dying
+        # as an uncaught exception (a windowed traceback dialog on a runner).
+        report(f"selftest FAIL: main window construction raised {type(exc).__name__}: {exc}", err=True)
+        return finish(1)
     try:
         # Stage 1: open through the GUI's own open path (tree population). A corrupt
         # input must fail the selftest, not crash it uncaught: dcmread(force=True)
@@ -220,19 +268,33 @@ def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None) -> in
 
     if failures:
         for f in failures:
-            print(f"selftest FAIL: {f}", file=sys.stderr)
-        print(f"selftest: {len(failures)} failure(s) on {src}", file=sys.stderr)
-        return 1
+            report(f"selftest FAIL: {f}", err=True)
+        report(f"selftest: {len(failures)} failure(s) on {src}", err=True)
+        return finish(1)
 
-    print(f"selftest OK on {src} ({len(original_bytes)} bytes opened through packaged build)")
+    report(f"selftest OK on {src} ({len(original_bytes)} bytes opened through packaged build)")
     for n in notes:
-        print(f"selftest: {n}")
-    return 0
+        report(f"selftest: {n}")
+    return finish(0)
 
 
 def selftest_main(argv: list[str]) -> int:
-    """Entry for the packaged executable: argv excludes the '--selftest' token."""
-    dicom_path, qpa, usage_rc = _parse_args(argv)
-    if usage_rc:
-        return usage_rc
-    return run_selftest(dicom_path, qpa)
+    """Entry for the packaged executable: argv excludes the '--selftest' token.
+
+    Catch-all per connor's #34 blocker: an uncaught exception anywhere above (a
+    module PyInstaller failed to collect, a window construction blowing up) must
+    fail the CI step with a printed traceback and exit 1 — never hang a runner
+    behind a windowed traceback dialog or a Start-Process -Wait that sleeps until
+    the job timeout.
+    """
+    try:
+        dicom_path, qpa, report_path, usage_rc = _parse_args(argv)
+        if usage_rc:
+            return usage_rc
+        return run_selftest(dicom_path, qpa, report_path)
+    except BaseException:
+        import traceback
+
+        traceback.print_exc()
+        print("selftest FAIL: uncaught exception (see traceback above)", file=sys.stderr)
+        return 1
