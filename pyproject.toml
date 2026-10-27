@@ -22,7 +22,7 @@ dependencies = [
     "dcm-mini-viewer",
     # platformdirs is imported by dcmqtreepy/dcmQTree.py:9 (user_log_dir) — a
     # RUNTIME import, not tooling. Declared here so `uv sync --no-dev` installs
-    # it; the constraint below pins it to poetry.lock parity 4.3.8 (Refs #11).
+    # it; the constraint below pins its exact version (Refs #11).
     "platformdirs>=4.2.0,<5",
 ]
 
@@ -47,18 +47,18 @@ dev = [
 # dcm-mini-viewer's caps (py3.13, PySide6, numpy, pydicom) move in #4.
 [tool.uv]
 constraint-dependencies = [
-    "altgraph==0.17.4",
-    "cfgv==3.4.0",
-    "distlib==0.3.9",
+    "altgraph==0.17.5",
+    "cfgv==3.5.0",
+    "distlib==0.4.4",
     "filelock==4.2.4",
-    "identify==2.6.10",
+    "identify==2.6.20",
     "iniconfig==2.3.1",
-    "macholib==1.16.3",
-    "nodeenv==1.9.1",
+    "macholib==1.16.4",
+    "nodeenv==1.11.0",
     "numpy==2.2.6",
-    "packaging==24.2",
-    "pefile==2023.2.7",
-    "platformdirs==4.3.8",
+    "packaging==26.3",
+    "pefile==2024.8.26",
+    "platformdirs==4.13.5",
     "pluggy==1.7.0",
     "pre-commit==4.7.0",
     "pydicom==2.4.4",
@@ -69,10 +69,10 @@ constraint-dependencies = [
     "PySide6==6.8.3",
     "pytest==9.1.1",
     "python-discovery==1.6.4",
-    "pyyaml==6.0.2",
+    "pyyaml==6.0.3",
     "setuptools==84.2.1",
     "typing-extensions==4.13.2",
-    "virtualenv==21.14.5",
+    "virtualenv==21.14.13",
 ]
 
 [tool.uv.sources]
