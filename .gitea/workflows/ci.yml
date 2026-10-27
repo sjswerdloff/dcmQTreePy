@@ -28,6 +28,9 @@ jobs:
     env:
       # The runner has no window-server session; PySide6 uses Qt's offscreen platform.
       QT_QPA_PLATFORM: offscreen
+      # The Studio tests the floor, always (#4). requires-python allows 3.12-3.14 and the runner keeps uv-managed
+      # Pythons between jobs, so an unpinned choice could change between runs with no commit changing it.
+      UV_PYTHON: "3.12"
     steps:
       - name: Homebrew first on PATH
         run: |
@@ -50,7 +53,7 @@ jobs:
         run: uv run --locked ruff check .
       - name: Check formatting with ruff
         run: uv run --locked ruff format --check .
-      # One Python here, whichever uv picks on the Studio (printed below); the 3.12-3.14 matrix runs on GitHub (#4).
+      # The floor, 3.12, here (UV_PYTHON above; printed below); the 3.12-3.14 matrix runs on GitHub (#4).
       - name: Test with pytest
         run: |
           uv run --locked python --version
