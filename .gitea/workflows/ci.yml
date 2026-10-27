@@ -50,5 +50,8 @@ jobs:
         run: uv run --locked ruff check .
       - name: Check formatting with ruff
         run: uv run --locked ruff format --check .
+      # One Python here, whichever uv picks on the Studio (printed below); the 3.12-3.14 matrix runs on GitHub (#4).
       - name: Test with pytest
-        run: uv run --locked pytest dcmqtreepy/tests
+        run: |
+          uv run --locked python --version
+          uv run --locked pytest dcmqtreepy/tests
