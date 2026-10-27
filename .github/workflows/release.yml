@@ -148,9 +148,10 @@ jobs:
           # not make of CI. Save-unchanged-through-the-GUI stays a manual acceptance item
           # (Stuart's scope call, per cyril's review).
           # cyril/cora/connor round four: the sample is passed BY PATH, never copied into
-          # dist or the bundle — Contents/MacOS holds executables only, and the bundle's
-          # pydicom data (charset_files/palettes, per the official hook) is library data,
-          # not test data; the .dcm-free-of-test_files assert below guards that line.
+          # dist or the bundle — the exe opens the runner's own locked-venv file. The
+          # bundle test-data guards (Contents/MacOS executables-only, no test_files) live
+          # on the macOS smoke step, where the bundle layout exists; this step's honest
+          # guarantee is that nothing is copied into dist\ here.
           # connor's two: timeout-minutes caps a hung Start-Process at 5 instead of 360;
           # a --windowed exe has sys.stderr == None, so the report goes to a file via
           # --report and the step Get-Content's it (rc 2 = usage/bad sample, rc 1 =
@@ -284,24 +285,33 @@ jobs:
           # passed BY PATH; Contents/MacOS holds executables only (Apple bundle layout), so
           # the earlier cp into the bundle is gone. Runs AFTER signing, before dmg — the
           # exact bundle that gets notarised is the bundle that gets tested.
+          set -euo pipefail
           CT_SMALL="$(uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')")"
           echo "sample stays on the runner: $CT_SMALL"
           [ -f "$CT_SMALL" ] || { echo "::error::CT_small.dcm not found in locked venv"; exit 1; }
           ./dist/dcmQTreePy.app/Contents/MacOS/dcmQTreePy --selftest "$CT_SMALL" --platform offscreen
-          # cora's round-five catch: $APP is scoped to the signing step — redeclare it
-          # HERE, and assert the bundle exists before guarding it. An empty or wrong
-          # $APP made find scan the whole workspace and pattern-match test artifacts
-          # created by the selftest's own save stage in RUNNER_TEMP — a gate that
-          # fails its own build. Guard the bundle, nothing else: no test_files data
-          # rides inside the app (PyInstaller's hook ships only charset/palettes).
+          # cora's round-five catch: $APP is step-scoped — redeclare it HERE and assert it
+          # exists before guarding it (an empty $APP made find scan the workspace and read
+          # whatever it matched as clean). cyril's shape of the same catch: capture find's
+          # output first, let set -e fail the step on a broken find, and grep the CAPTURED
+          # output — grep -q closing the pipe early is a SIGPIPE the pipeline would report.
+          # Guards the bundle only. Its pydicom data (charset_files/, palettes/ — what the
+          # locked PyInstaller hook collects) legitimately rides along; test data may not:
+          # no test_files/*.dcm anywhere in the bundle, no data file in Contents/MacOS.
           APP="dist/dcmQTreePy.app"
           [ -d "$APP" ] || { echo "::error::bundle $APP missing at smoke step"; exit 1; }
-          if find "$APP" -path "*test_files*" -name '*.dcm' -print | grep -q .; then
-            echo "::error::test DICOM found inside the app bundle:"; find "$APP" -path "*test_files*" -name '*.dcm'; exit 1
+          DCMS="$(find "$APP" -type f -name '*.dcm')"
+          if printf '%s\n' "$DCMS" | grep 'test_files.*\.dcm$' >/dev/null; then
+            echo "::error::test_files DICOM inside the app bundle:"
+            printf '%s\n' "$DCMS" | grep 'test_files.*\.dcm$'
+            exit 1
           fi
-          if [ -e "$APP/Contents/MacOS/CT_small.dcm" ]; then
-            echo "::error::Contents/MacOS holds a data file — test data in the signed bundle"; exit 1
+          if printf '%s\n' "$DCMS" | grep 'Contents/MacOS/' >/dev/null; then
+            echo "::error::data file in Contents/MacOS (executables only):"
+            printf '%s\n' "$DCMS" | grep 'Contents/MacOS/'
+            exit 1
           fi
+          printf 'bundle .dcm inventory (library data only): %s\n' "${DCMS:-none}"
           echo "signed bundle smoke passed and bundle verified free of test data"
       - name: Notarize the .app (submit .zip, wait, staple, validate)
         env:
