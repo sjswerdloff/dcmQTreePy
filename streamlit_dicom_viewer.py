@@ -91,7 +91,7 @@ def display_sequence(elem: DataElement, path: str, level: int = 0) -> None:
             if st.button(
                 f"{'  ' * level}{'▼' if is_expanded else '▶'} {elem.name} (Sequence)",
                 key=f"btn_{path}",
-                use_container_width=True,
+                width="stretch",
                 type="primary" if is_selected else "secondary",
             ):
                 set_state("expanded", path, not is_expanded)
@@ -133,7 +133,7 @@ def display_sequence(elem: DataElement, path: str, level: int = 0) -> None:
                     if st.button(
                         f"{'  ' * (level + 1)}{'▼' if item_expanded else '▶'} Item {idx + 1}",
                         key=f"btn_{item_path}",
-                        use_container_width=True,
+                        width="stretch",
                         type="primary" if item_selected else "secondary",
                     ):
                         set_state("expanded", item_path, not item_expanded)
