@@ -69,8 +69,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tagfrompyproject.outputs.tag }}
         run: |
-          gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" --silent >/dev/null 2>&1
-          RC=$?
+          RC=0
+          gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" --silent >/dev/null 2>&1 || RC=$?
           if [ "$RC" -eq 0 ]; then
             echo "::error::tag $TAG already exists — bump pyproject's version first"; exit 1; fi
           OUT="$(gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" 2>&1 || true)"
@@ -292,8 +292,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.verify-inputs.outputs.tag }}
         run: |
-          gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" --silent >/dev/null 2>&1
-          RC=$?
+          RC=0
+          gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" --silent >/dev/null 2>&1 || RC=$?
           if [ "$RC" -eq 0 ]; then
             echo "::error::tag $TAG appeared during the build — refusing to overwrite"; exit 1; fi
           OUT="$(gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" 2>&1 || true)"
