@@ -29,6 +29,24 @@ def set_state(key_type: str, path: str, value: any):
     st.session_state[key] = value
 
 
+def toggle_expanded(path: str) -> None:
+    """Button callback: expand or collapse ``path``.
+
+    Streamlit runs a callback BEFORE the script reruns, so the rerun that handles the click already
+    sees the new state (#27). Toggling after ``st.button`` returned True instead left the click's own
+    rerun rendering the old state, and the change showed only on the rerun after.
+    """
+    set_state("expanded", path, not get_state("expanded", path, False))
+
+
+def select_only(path: str) -> None:
+    """Button callback: make ``path`` the only selected element (see :func:`toggle_expanded`)."""
+    for key in st.session_state:
+        if key.startswith("state_selected_"):
+            st.session_state[key] = False
+    set_state("selected", path, True)
+
+
 def format_tag(tag) -> str:
     """Format DICOM tag as 8-character hex string."""
     return f"{tag:08x}"
@@ -88,21 +106,17 @@ def display_sequence(elem: DataElement, path: str, level: int = 0) -> None:
         col1, col2 = st.columns([8, 2])
 
         with col1:
-            if st.button(
+            st.button(
                 f"{'  ' * level}{'▼' if is_expanded else '▶'} {elem.name} (Sequence)",
                 key=f"btn_{path}",
                 width="stretch",
                 type="primary" if is_selected else "secondary",
-            ):
-                set_state("expanded", path, not is_expanded)
+                on_click=toggle_expanded,
+                args=(path,),
+            )
 
         with col2:
-            if st.button("Select", key=f"sel_{path}"):
-                # Clear all other selections
-                for key in st.session_state:
-                    if key.startswith("state_selected_"):
-                        st.session_state[key] = False
-                set_state("selected", path, True)
+            st.button("Select", key=f"sel_{path}", on_click=select_only, args=(path,))
 
         # Display sequence items if expanded
         if is_expanded:
@@ -130,21 +144,17 @@ def display_sequence(elem: DataElement, path: str, level: int = 0) -> None:
                 item_col1, item_col2 = st.columns([8, 2])
 
                 with item_col1:
-                    if st.button(
+                    st.button(
                         f"{'  ' * (level + 1)}{'▼' if item_expanded else '▶'} Item {idx + 1}",
                         key=f"btn_{item_path}",
                         width="stretch",
                         type="primary" if item_selected else "secondary",
-                    ):
-                        set_state("expanded", item_path, not item_expanded)
+                        on_click=toggle_expanded,
+                        args=(item_path,),
+                    )
 
                 with item_col2:
-                    if st.button("Select", key=f"sel_{item_path}"):
-                        # Clear all other selections
-                        for key in st.session_state:
-                            if key.startswith("state_selected_"):
-                                st.session_state[key] = False
-                        set_state("selected", item_path, True)
+                    st.button("Select", key=f"sel_{item_path}", on_click=select_only, args=(item_path,))
 
                 # Display item contents if expanded
                 if item_expanded:
