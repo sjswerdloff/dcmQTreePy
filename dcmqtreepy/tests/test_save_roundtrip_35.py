@@ -46,6 +46,7 @@ def _save_through_app(w: M.DCMQtreePy, dest: pathlib.Path) -> None:
     w._save_dataset_to(dest)
 
 
+class TestSaveRoundtripPreservesPrivateElements:
     """#35: open-then-save must not drop private elements."""
 
     def test_no_tags_dropped_or_added(self, loaded_widget):
