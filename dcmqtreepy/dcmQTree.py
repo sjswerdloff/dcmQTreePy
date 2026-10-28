@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import atexit
+from copy import deepcopy
 import logging
 import os
 import sys
@@ -77,6 +78,7 @@ class DCMQtreePy(QMainWindow):
         # header.setStretchLastSection(False)
         # header.setSectionResizeMode(5, QHeaderView.Stretch)
         self.dcm_tree_widget.itemDoubleClicked.connect(self.on_tree_widget_item_double_clicked)
+        self.dcm_tree_widget.itemChanged.connect(self.on_tree_item_changed)
         self.ui.listWidget.itemSelectionChanged.connect(self.on_item_selection_changed)
         #     self.tree_del_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.dcm_tree_widget)
         #     self.tree_del_shortcut.activated.connect(self.handle_tree_delete_pressed)
@@ -508,6 +510,7 @@ class DCMQtreePy(QMainWindow):
             ds = dcmread(path, force=True)
             # ds.remove_private_tags() # temporarily, until save as is working.
             self.current_dataset = ds
+            self.dcm_tree_widget.blockSignals(True)
             self.dcm_tree_widget.clear()
             tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
             context = build_context(ds.SOPClassUID)
@@ -515,6 +518,7 @@ class DCMQtreePy(QMainWindow):
             tree_child_item.setText(0, abstract_syntax)
             self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
             tree_child_item.setExpanded(True)
+            self.dcm_tree_widget.blockSignals(False)
             self.has_edits = False
 
     def on_file_save_as(self):
@@ -524,54 +528,24 @@ class DCMQtreePy(QMainWindow):
             return
         path = Path(file_name)
         self.previous_save_path = path.parent
-        iterator = QTreeWidgetItemIterator(self.dcm_tree_widget)
-        tree_child_item = iterator.__next__().value()
-        modified_ds = Dataset()
-
-        # modified_ds.is_little_endian = True
-
-        for child_index in range(tree_child_item.childCount()):
-            child = tree_child_item.child(child_index)
-            self._populate_dataset_from_tree_widget_item(parent_ds=modified_ds, tree_widget_item=child)
-
-        if "PixelData" in self.current_dataset:
-            modified_ds["PixelData"] = self.current_dataset["PixelData"]
-        # modified_ds.fix_meta_info(enforce_standard=False)
-        modified_ds.ensure_file_meta()
-        #
-        modified_ds.is_implicit_VR = False
-        modified_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
-        # del modified_ds[0x300a0782]
-        # modified_ds.remove_private_tags() # temporary... first get save as working for public elements
-        dcmwrite(Path(file_name), modified_ds, write_like_original=False)
-        self.has_edits = False  # not quite true, but the data has been saved, so switching and losing the current edits is OK.
+        self._save_dataset_to(path)
+        self.has_edits = False
 
     def on_file_save(self):
         file_name = self.current_list_item.text()
         path = Path(file_name)
         self.previous_save_path = path.parent
-        iterator = QTreeWidgetItemIterator(self.dcm_tree_widget)
-        tree_child_item = iterator.__next__().value()
-        modified_ds = Dataset()
+        self._save_dataset_to(path)
+        self.has_edits = False
 
-        # modified_ds.is_little_endian = True
-
-        for child_index in range(tree_child_item.childCount()):
-            child = tree_child_item.child(child_index)
-            self._populate_dataset_from_tree_widget_item(parent_ds=modified_ds, tree_widget_item=child)
-
-        if "PixelData" in self.current_dataset:
-            modified_ds["PixelData"] = self.current_dataset["PixelData"]
-        # modified_ds.fix_meta_info(enforce_standard=False)
+    def _save_dataset_to(self, path: Path) -> None:
+        # Save from current_dataset, not from the tree (issue #35). The tree is a view;
+        # anything it cannot represent (private elements, OB/OW bytes) must survive.
+        modified_ds = deepcopy(self.current_dataset)
         modified_ds.ensure_file_meta()
-        #
         modified_ds.is_implicit_VR = False
         modified_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
-        # del modified_ds[0x300a0782]
-        # modified_ds.remove_private_tags() # temporary... first get save as working for public elements
-        dcmwrite(Path(file_name), modified_ds, write_like_original=False)
-        self.has_edits = False  # not quite true, but the data has been saved, so switching and losing the current edits is OK.
-
+        dcmwrite(path, modified_ds, write_like_original=False)
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
         add_element_dialog.setProperty("help_id", "add_public_element_dialog")
@@ -694,6 +668,26 @@ class DCMQtreePy(QMainWindow):
         self.ui.listWidget.takeItem(current_row)
 
     @Slot()
+    def on_tree_item_changed(self, item: QTreeWidgetItem, column: int):
+        if column != 2:
+            return
+        tag_as_string = item.text(0)
+        tag = self._convert_tag_as_string_to_tuple(tag_as_string)
+        new_value = item.text(2)
+        try:
+            elem = self.current_dataset[pydicom.tag.Tag(tag)]
+            if elem.VR in ("SS", "US", "SL", "UL"):
+                elem.value = int(new_value)
+            elif elem.VR in ("FL", "FD", "DS"):
+                elem.value = float(new_value)
+            elif elem.VR == "SQ":
+                pass
+            else:
+                elem.value = new_value
+        except Exception:
+            pass
+        self.has_edits = True
+
     def handle_tree_delete_pressed(self, event):
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -706,7 +700,7 @@ class DCMQtreePy(QMainWindow):
                 tag = self._convert_tag_as_string_to_tuple(tag_as_string)
                 if tag[0] % 2 == 1:
                     private_block_byte = tag[1] % 256  # lower 8 bits...
-                    if private_block_byte == 0x10:
+                    if tag[1] >= 0x0010 and tag[1] <= 0x00FF:
                         # is_private_creator = True
                         next_child = parent.child(child_index + 1)
                         tag_as_string = next_child.text(0)
@@ -719,6 +713,7 @@ class DCMQtreePy(QMainWindow):
                             )
                             return
                 parent.takeChild(child_index)
+                del self.current_dataset[pydicom.tag.Tag(tag)]
                 self.has_edits = True
 
     def eventFilter(self, obj, event):
