@@ -748,6 +748,16 @@ class DCMQtreePy(QMainWindow):
                     parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
                     try:
                         del parent_ds[pydicom.tag.Tag(tag)]
+                        # Remove empty sequence items after element delete
+                        if parent_ds is not self.current_dataset:
+                            gp = selected_item.parent().parent()
+                            if gp is not None and gp.text(2).isdigit():
+                                gp_tag = self._convert_tag_as_string_to_tuple(gp.text(0))
+                                seq_elem = self.current_dataset.get(pydicom.tag.Tag(gp_tag))
+                                if seq_elem is not None and seq_elem.VR == "SQ":
+                                    item_idx = int(gp.text(2)) - 1
+                                    if 0 <= item_idx < len(seq_elem.value) and not seq_elem.value[item_idx]:
+                                        del seq_elem.value[item_idx]
                     except KeyError:
                         pass
                 parent.takeChild(child_index)
