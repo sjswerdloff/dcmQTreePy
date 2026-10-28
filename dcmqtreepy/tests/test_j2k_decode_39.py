@@ -14,9 +14,15 @@ import numpy as np
 import pydicom
 import pytest
 
-from dcmqtreepy.selftest import check_signed_j2k_decode
+from dcmqtreepy.selftest import J2K_DECODER_NOT_INSTALLED_HERE, check_signed_j2k_decode
 
 TEST_FILES = Path(pydicom.__file__).parent / "data" / "test_files"
+
+# Skipped only where pyproject leaves the decoder out (Windows ARM64: no wheel). Anywhere
+# else a missing decoder fails these tests rather than skipping them.
+pytestmark = pytest.mark.skipif(
+    J2K_DECODER_NOT_INSTALLED_HERE, reason="pylibjpeg-openjpeg is not installed on Windows ARM64 (no wheel)"
+)
 
 
 def test_signed_j2k_made_in_memory_decodes_equal() -> None:

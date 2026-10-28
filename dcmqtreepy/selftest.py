@@ -55,6 +55,7 @@ search runs (dev convenience only; it fails closed with exit 2 if nothing is fou
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import sys
 import tempfile
@@ -145,6 +146,12 @@ def _save_through_writer(src: Path, out_path: Path) -> None:
     ds.is_implicit_VR = False
     ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
     dcmwrite(out_path, ds, write_like_original=False)
+
+
+# pylibjpeg-openjpeg has no Windows ARM64 wheel, so pyproject leaves it out there (the same
+# condition as its environment marker). Only on that platform is the J2K check skipped;
+# everywhere else a missing decoder is a failure.
+J2K_DECODER_NOT_INSTALLED_HERE = sys.platform == "win32" and platform.machine() == "ARM64"
 
 
 def check_signed_j2k_decode() -> str | None:
@@ -307,14 +314,17 @@ def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None, repor
 
         # Stage 4: a signed JPEG 2000 image decodes exactly (#39). In a packaged build
         # this is also the proof that pylibjpeg's decoder plugin was bundled.
-        try:
-            j2k_problem = check_signed_j2k_decode()
-        except Exception as exc:
-            j2k_problem = f"signed JPEG 2000 check raised {exc!r}"
-        if j2k_problem:
-            failures.append(f"j2k: {j2k_problem}")
+        if J2K_DECODER_NOT_INSTALLED_HERE:
+            notes.append("j2k: SKIPPED on Windows ARM64, where pylibjpeg-openjpeg is not installed")
         else:
-            notes.append("j2k: signed JPEG 2000 Lossless decoded equal to its source")
+            try:
+                j2k_problem = check_signed_j2k_decode()
+            except Exception as exc:
+                j2k_problem = f"signed JPEG 2000 check raised {exc!r}"
+            if j2k_problem:
+                failures.append(f"j2k: {j2k_problem}")
+            else:
+                notes.append("j2k: signed JPEG 2000 Lossless decoded equal to its source")
     finally:
         widget.help_assistant.cleanup()
         widget.close()

@@ -28,7 +28,9 @@ dependencies = [
     # Pillow's handler fails on signed images. Never pylibjpeg[all] or pylibjpeg-libjpeg:
     # that plugin is GPL-3.0 and this app is Apache-2.0.
     "pylibjpeg>=2.1.0,<3",
-    "pylibjpeg-openjpeg>=2.6.0,<3",
+    # No Windows ARM64 wheel exists (2.6.0), and a source build needs CMake and a C
+    # toolchain, so it is left out there and J2K does not render on that platform.
+    "pylibjpeg-openjpeg>=2.6.0,<3; sys_platform != 'win32' or platform_machine != 'ARM64'",
 ]
 
 [project.scripts]
