@@ -688,6 +688,29 @@ class DCMQtreePy(QMainWindow):
             pass
         self.has_edits = True
 
+    def _find_parent_dataset(self, item: QTreeWidgetItem):
+        """Walk up the tree to find the Dataset that holds this element.
+        Returns (parent_ds, is_sequence_item, seq_tag, item_index).
+        """
+        parent = item.parent()
+        if parent is None:
+            return self.current_dataset, False, None, None
+        parent_tag_str = parent.text(0)
+        parent_tag = self._convert_tag_as_string_to_tuple(parent_tag_str)
+        # If parent is a sequence item (text(2) is a number), go one level up
+        if parent.text(2).isdigit():
+            grandparent = parent.parent()
+            if grandparent is not None:
+                gp_tag = self._convert_tag_as_string_to_tuple(grandparent.text(0))
+                seq_elem = self.current_dataset.get(pydicom.tag.Tag(gp_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ":
+                    item_idx = int(parent.text(2)) - 1
+                    if 0 <= item_idx < len(seq_elem.value):
+                        return seq_elem.value[item_idx], True, gp_tag, item_idx
+            return self.current_dataset, False, None, None
+        # Parent is a regular element — this is a top-level element
+        return self.current_dataset, False, None, None
+
     def handle_tree_delete_pressed(self, event):
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -699,21 +722,35 @@ class DCMQtreePy(QMainWindow):
                 tag_as_string = selected_item.text(0)
                 tag = self._convert_tag_as_string_to_tuple(tag_as_string)
                 if tag[0] % 2 == 1:
-                    private_block_byte = tag[1] % 256  # lower 8 bits...
+                    private_block_byte = tag[1] % 256
                     if tag[1] >= 0x0010 and tag[1] <= 0x00FF:
-                        # is_private_creator = True
                         next_child = parent.child(child_index + 1)
-                        tag_as_string = next_child.text(0)
-                        tag = self._convert_tag_as_string_to_tuple(tag_as_string)
-                        if tag[0] % 2 == 1:
-                            self.non_native_warning_message(
-                                "Private Block has private elements",
-                                "Delete private elements in block before deleting Private Creator",
-                                buttons=QMessageBox.Ok,
-                            )
-                            return
+                        if next_child is not None:
+                            tag_as_string2 = next_child.text(0)
+                            tag2 = self._convert_tag_as_string_to_tuple(tag_as_string2)
+                            if tag2[0] % 2 == 1:
+                                self.non_native_warning_message(
+                                    "Private Block has private elements",
+                                    "Delete private elements in block before deleting Private Creator",
+                                    buttons=QMessageBox.Ok,
+                                )
+                                return
+                # Check if this is a sequence item
+                if selected_item.text(2).isdigit():
+                    # Deleting a sequence item
+                    parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_item)
+                    if is_sq and seq_tag is not None:
+                        seq_elem = self.current_dataset.get(pydicom.tag.Tag(seq_tag))
+                        if seq_elem is not None and seq_elem.VR == "SQ":
+                            del seq_elem.value[item_idx]
+                else:
+                    # Deleting a regular element
+                    parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
+                    try:
+                        del parent_ds[pydicom.tag.Tag(tag)]
+                    except KeyError:
+                        pass
                 parent.takeChild(child_index)
-                del self.current_dataset[pydicom.tag.Tag(tag)]
                 self.has_edits = True
 
     def eventFilter(self, obj, event):
