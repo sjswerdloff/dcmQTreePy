@@ -691,6 +691,15 @@ class DCMQtreePy(QMainWindow):
     def _find_parent_dataset(self, item: QTreeWidgetItem):
         """Walk up the tree to find the Dataset that holds this element.
         Returns (parent_ds, is_sequence_item, seq_tag, item_index).
+        # If the item itself is a sequence item, find its sequence
+        if item.text(2).isdigit() and parent is not None:
+            gp = parent.parent()
+            if gp is not None:
+                gp_tag = self._convert_tag_as_string_to_tuple(gp.text(0))
+                seq_elem = self.current_dataset.get(pydicom.tag.Tag(gp_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ":
+                    item_idx = int(item.text(2)) - 1
+                    return self.current_dataset, True, gp_tag, item_idx
         """
         parent = item.parent()
         if parent is None:
@@ -747,15 +756,17 @@ class DCMQtreePy(QMainWindow):
                     # Deleting a regular element
                     parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
                     try:
+                        print(f"DEL: parent_ds is current={parent_ds is self.current_dataset}")
                         del parent_ds[pydicom.tag.Tag(tag)]
                         # Remove empty sequence items after element delete
                         if parent_ds is not self.current_dataset:
-                            gp = selected_item.parent().parent()
+                            gp = selected_item.parent()
                             if gp is not None and gp.text(2).isdigit():
                                 gp_tag = self._convert_tag_as_string_to_tuple(gp.text(0))
                                 seq_elem = self.current_dataset.get(pydicom.tag.Tag(gp_tag))
                                 if seq_elem is not None and seq_elem.VR == "SQ":
                                     item_idx = int(gp.text(2)) - 1
+                                    print(f"EMPTY CHECK: item_idx={item_idx} len={len(seq_elem.value)} val={seq_elem.value[item_idx]}")
                                     if 0 <= item_idx < len(seq_elem.value) and not seq_elem.value[item_idx]:
                                         del seq_elem.value[item_idx]
                     except KeyError:
