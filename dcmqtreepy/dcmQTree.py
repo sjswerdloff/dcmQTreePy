@@ -615,6 +615,7 @@ class DCMQtreePy(QMainWindow):
             else:
                 element_value = value_list
         private_element.value = element_value
+        self.current_dataset[private_element.tag] = private_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
