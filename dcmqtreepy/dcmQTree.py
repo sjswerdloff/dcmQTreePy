@@ -743,12 +743,12 @@ class DCMQtreePy(QMainWindow):
                                     buttons=QMessageBox.Ok,
                                 )
                                 return
-                # Check if this is a sequence item
-                if selected_item.text(2).isdigit():
+                print(f"CHECK: text2={selected_item.text(2)} isdigit={selected_item.text(2).isdigit()}")
+                # Sequence items share their parent tag and have numeric text(2)
+                is_seq_item = selected_item.text(2).isdigit() and selected_item.text(0) == parent.text(0)
+                if is_seq_item:
                     # Deleting a sequence item
-                    print(f"SEQ ITEM DELETE: text2={selected_item.text(2)}")
                     parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_item)
-                    print(f"FIND: is_sq={is_sq} seq_tag={seq_tag} item_idx={item_idx}")
                     if is_sq and seq_tag is not None:
                         seq_elem = self.current_dataset.get(pydicom.tag.Tag(seq_tag))
                         if seq_elem is not None and seq_elem.VR == "SQ":
@@ -757,7 +757,6 @@ class DCMQtreePy(QMainWindow):
                     # Deleting a regular element
                     parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
                     try:
-                        print(f"DEL: parent_ds is current={parent_ds is self.current_dataset}")
                         del parent_ds[pydicom.tag.Tag(tag)]
                         # Remove empty sequence items after element delete
                         if parent_ds is not self.current_dataset:
@@ -767,7 +766,6 @@ class DCMQtreePy(QMainWindow):
                                 seq_elem = self.current_dataset.get(pydicom.tag.Tag(gp_tag))
                                 if seq_elem is not None and seq_elem.VR == "SQ":
                                     item_idx = int(gp.text(2)) - 1
-                                    print(f"EMPTY CHECK: item_idx={item_idx} len={len(seq_elem.value)} val={seq_elem.value[item_idx]}")
                                     if 0 <= item_idx < len(seq_elem.value) and not seq_elem.value[item_idx]:
                                         del seq_elem.value[item_idx]
                     except KeyError:
