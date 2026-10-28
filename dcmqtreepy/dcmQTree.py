@@ -539,6 +539,8 @@ class DCMQtreePy(QMainWindow):
         self.has_edits = False
 
     def _save_dataset_to(self, path: Path) -> None:
+        if hasattr(self, "_pending_error") and self._pending_error is not None:
+            raise self._pending_error
         # Save from current_dataset, not from the tree (issue #35). The tree is a view;
         # anything it cannot represent (private elements, OB/OW bytes) must survive.
         modified_ds = deepcopy(self.current_dataset)
@@ -684,7 +686,8 @@ class DCMQtreePy(QMainWindow):
                 pass
             else:
                 elem.value = new_value
-        except Exception:
+        except (KeyError, ValueError) as e:
+            self._pending_error = ValueError(f"{tag_as_string}: {e}")
             pass
         self.has_edits = True
 
