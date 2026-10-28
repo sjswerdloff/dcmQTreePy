@@ -100,6 +100,7 @@ class DCMQtreePy(QMainWindow):
         self.current_list_item = None
         self.reverting_list_item = False
         self.current_dataset = Dataset()
+        self._delete_journal = []
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         logging.info("Loading Known Private Dictionaries")
@@ -760,11 +761,13 @@ class DCMQtreePy(QMainWindow):
                     if is_sq and seq_tag is not None:
                         seq_elem = self.current_dataset.get(pydicom.tag.Tag(seq_tag))
                         if seq_elem is not None and seq_elem.VR == "SQ":
+                            self._delete_journal.append(("seq_item", seq_tag, item_idx))
                             del seq_elem.value[item_idx]
                 else:
                     # Deleting a regular element
                     parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
                     try:
+                        self._delete_journal.append(("seq" if tag in [t for t in self.current_dataset.keys() if self.current_dataset[t].VR == "SQ"] else "element", tag, parent_ds is self.current_dataset))
                         del parent_ds[pydicom.tag.Tag(tag)]
                         # Remove empty sequence items after element delete
                         if parent_ds is not self.current_dataset:
