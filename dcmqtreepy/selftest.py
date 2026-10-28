@@ -17,7 +17,9 @@ itself (``dcmQTreePy --selftest``), which proves the bundle end to end:
 - save-unchanged with byte comparison: reads the sample, writes it back with
   pydicom's writer (with the same ``ensure_file_meta`` + explicit-VR little-endian
   finalization ``on_file_save_as`` performs), asserts the written bytes are
-  byte-identical to the input, and asserts determinism (two saves identical).
+  byte-identical to the input, and asserts determinism (two saves identical);
+- decodes a signed JPEG 2000 Lossless image made in memory and asserts it equals its
+  source (#39), which in a packaged build also proves pylibjpeg's plugin was bundled.
 
 Why the save stage goes through pydicom's writer and not the tree round trip —
 probed on this host (macOS arm64, locked venv, pydicom 2.4.5) BEFORE wiring:
@@ -145,6 +147,47 @@ def _save_through_writer(src: Path, out_path: Path) -> None:
     dcmwrite(out_path, ds, write_like_original=False)
 
 
+def check_signed_j2k_decode() -> str | None:
+    """Decode a signed JPEG 2000 Lossless image through ``pixel_array`` and compare it
+    with the array it was encoded from. Returns None when equal, else what went wrong.
+
+    Refs #39: pydicom 2.4.5 tries Pillow first for JPEG 2000, and Pillow's handler fails
+    on signed images under numpy 2 (int16 OverflowError). pydicom then falls back to
+    pylibjpeg-openjpeg, which pylibjpeg finds through entry-point metadata, so in a
+    PyInstaller build this passes only if that metadata was bundled. The image is made
+    here, so no sample file is needed: values span negative and positive, and through
+    Pillow alone the same bytes raise the #39 OverflowError.
+    """
+    import numpy as np
+    import openjpeg
+    from pydicom.dataset import Dataset, FileMetaDataset
+    from pydicom.encaps import encapsulate
+    from pydicom.uid import JPEG2000Lossless
+
+    expected = (np.arange(64 * 64, dtype=np.int32).reshape(64, 64) % 4000 - 2000).astype(np.int16)
+    ds = Dataset()
+    ds.file_meta = FileMetaDataset()
+    ds.file_meta.TransferSyntaxUID = JPEG2000Lossless
+    ds.is_little_endian = True
+    ds.is_implicit_VR = False
+    ds.Rows, ds.Columns = expected.shape
+    ds.SamplesPerPixel = 1
+    ds.PhotometricInterpretation = "MONOCHROME2"
+    ds.BitsAllocated = 16
+    ds.BitsStored = 16
+    ds.HighBit = 15
+    ds.PixelRepresentation = 1
+    ds.PixelData = encapsulate([openjpeg.encode(expected)])
+    ds["PixelData"].VR = "OB"
+    try:
+        decoded = ds.pixel_array
+    except Exception as exc:
+        return f"signed JPEG 2000 did not decode: {type(exc).__name__}: {exc}"
+    if decoded.dtype != expected.dtype or not np.array_equal(decoded, expected):
+        return f"signed JPEG 2000 decoded wrong: dtype {decoded.dtype}, min {decoded.min()}, max {decoded.max()}"
+    return None
+
+
 def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None, report_path: Path | None = None) -> int:
     """Open, save + byte-stability + value round trip, view. Returns process exit code.
 
@@ -261,6 +304,17 @@ def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None, repor
                 notes.append(f"view: rendered {pix.width()}x{pix.height()} pixmap")
         except Exception as exc:
             failures.append(f"view: viewer render raised {exc!r}")
+
+        # Stage 4: a signed JPEG 2000 image decodes exactly (#39). In a packaged build
+        # this is also the proof that pylibjpeg's decoder plugin was bundled.
+        try:
+            j2k_problem = check_signed_j2k_decode()
+        except Exception as exc:
+            j2k_problem = f"signed JPEG 2000 check raised {exc!r}"
+        if j2k_problem:
+            failures.append(f"j2k: {j2k_problem}")
+        else:
+            notes.append("j2k: signed JPEG 2000 Lossless decoded equal to its source")
     finally:
         widget.help_assistant.cleanup()
         widget.close()

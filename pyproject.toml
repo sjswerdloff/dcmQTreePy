@@ -24,6 +24,11 @@ dependencies = [
     # RUNTIME import, not tooling. Declared here so `uv sync --no-dev` installs
     # it; the constraint below pins its exact version (Refs #11).
     "platformdirs>=4.2.0,<5",
+    # JPEG 2000 decoding (#39): pydicom 2.4.5 falls back to pylibjpeg-openjpeg (MIT) when
+    # Pillow's handler fails on signed images. Never pylibjpeg[all] or pylibjpeg-libjpeg:
+    # that plugin is GPL-3.0 and this app is Apache-2.0.
+    "pylibjpeg>=2.1.0,<3",
+    "pylibjpeg-openjpeg>=2.6.0,<3",
 ]
 
 [project.scripts]
@@ -63,6 +68,8 @@ constraint-dependencies = [
     "pre-commit==4.7.0",
     "pydicom==2.4.5",
     "pygments==2.21.0",
+    "pylibjpeg==2.1.0",
+    "pylibjpeg-openjpeg==2.6.0",
     "pyinstaller-hooks-contrib==2026.9",
     "pyinstaller==6.22.3",
     "pynetdicom==2.1.1",
