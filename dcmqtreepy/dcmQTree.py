@@ -696,6 +696,8 @@ class DCMQtreePy(QMainWindow):
         if parent is None:
             return self.current_dataset, False, None, None
         parent_tag_str = parent.text(0)
+        if "(" not in parent_tag_str:
+            return self.current_dataset, False, None, None
         parent_tag = self._convert_tag_as_string_to_tuple(parent_tag_str)
         # If the item itself is a sequence item, parent is the sequence header
         if item.text(2).isdigit():
