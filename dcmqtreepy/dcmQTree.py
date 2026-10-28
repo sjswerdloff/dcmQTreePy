@@ -767,7 +767,11 @@ class DCMQtreePy(QMainWindow):
                     # Deleting a regular element
                     parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
                     try:
-                        self._delete_journal.append(("seq" if tag in [t for t in self.current_dataset.keys() if self.current_dataset[t].VR == "SQ"] else "element", tag, parent_ds is self.current_dataset))
+                        elem = parent_ds.get(pydicom.tag.Tag(tag))
+                        kind = "seq" if elem is not None and elem.VR == "SQ" else "element"
+                        self._delete_journal.append((kind, tag, parent_ds is self.current_dataset))
+                        if kind == "seq" and elem is not None and len(elem.value) > 0:
+                            self._delete_journal.append(("subtree", tag, parent_ds is self.current_dataset))
                         del parent_ds[pydicom.tag.Tag(tag)]
                         # Remove empty sequence items after element delete
                         if parent_ds is not self.current_dataset:
