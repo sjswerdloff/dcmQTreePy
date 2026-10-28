@@ -691,22 +691,20 @@ class DCMQtreePy(QMainWindow):
     def _find_parent_dataset(self, item: QTreeWidgetItem):
         """Walk up the tree to find the Dataset that holds this element.
         Returns (parent_ds, is_sequence_item, seq_tag, item_index).
-        # If the item itself is a sequence item, find its sequence
-        if item.text(2).isdigit() and parent is not None:
-            gp = parent.parent()
-            if gp is not None:
-                gp_tag = self._convert_tag_as_string_to_tuple(gp.text(0))
-                seq_elem = self.current_dataset.get(pydicom.tag.Tag(gp_tag))
-                if seq_elem is not None and seq_elem.VR == "SQ":
-                    item_idx = int(item.text(2)) - 1
-                    return self.current_dataset, True, gp_tag, item_idx
         """
         parent = item.parent()
         if parent is None:
             return self.current_dataset, False, None, None
         parent_tag_str = parent.text(0)
         parent_tag = self._convert_tag_as_string_to_tuple(parent_tag_str)
-        # If parent is a sequence item (text(2) is a number), go one level up
+        # If the item itself is a sequence item, parent is the sequence header
+        if item.text(2).isdigit():
+            seq_elem = self.current_dataset.get(pydicom.tag.Tag(parent_tag))
+            if seq_elem is not None and seq_elem.VR == "SQ":
+                item_idx = int(item.text(2)) - 1
+                return self.current_dataset, True, parent_tag, item_idx
+            return self.current_dataset, False, None, None
+        # If parent is a sequence item, go one level up
         if parent.text(2).isdigit():
             grandparent = parent.parent()
             if grandparent is not None:
@@ -717,7 +715,6 @@ class DCMQtreePy(QMainWindow):
                     if 0 <= item_idx < len(seq_elem.value):
                         return seq_elem.value[item_idx], True, gp_tag, item_idx
             return self.current_dataset, False, None, None
-        # Parent is a regular element — this is a top-level element
         return self.current_dataset, False, None, None
 
     def handle_tree_delete_pressed(self, event):
@@ -747,7 +744,9 @@ class DCMQtreePy(QMainWindow):
                 # Check if this is a sequence item
                 if selected_item.text(2).isdigit():
                     # Deleting a sequence item
+                    print(f"SEQ ITEM DELETE: text2={selected_item.text(2)}")
                     parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_item)
+                    print(f"FIND: is_sq={is_sq} seq_tag={seq_tag} item_idx={item_idx}")
                     if is_sq and seq_tag is not None:
                         seq_elem = self.current_dataset.get(pydicom.tag.Tag(seq_tag))
                         if seq_elem is not None and seq_elem.VR == "SQ":
