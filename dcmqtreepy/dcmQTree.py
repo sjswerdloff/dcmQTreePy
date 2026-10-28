@@ -740,11 +740,16 @@ class DCMQtreePy(QMainWindow):
                             tag_as_string2 = next_child.text(0)
                             tag2 = self._convert_tag_as_string_to_tuple(tag_as_string2)
                             if tag2[0] % 2 == 1:
-                                self.non_native_warning_message(
-                                    "Private Block has private elements",
-                                    "Delete private elements in block before deleting Private Creator",
-                                    buttons=QMessageBox.Ok,
-                                )
+                                # Delete all members in this block first
+                                for j in range(parent.childCount() - 1, child_index, -1):
+                                    member = parent.child(j)
+                                    member_tag = self._convert_tag_as_string_to_tuple(member.text(0))
+                                    if member_tag[0] % 2 == 1:
+                                        parent.takeChild(j)
+                                        try:
+                                            del self.current_dataset[pydicom.tag.Tag(member_tag)]
+                                        except KeyError:
+                                            pass
                                 return
                 print(f"CHECK: text2={selected_item.text(2)} isdigit={selected_item.text(2).isdigit()}")
                 # Sequence items share their parent tag and have numeric text(2)
