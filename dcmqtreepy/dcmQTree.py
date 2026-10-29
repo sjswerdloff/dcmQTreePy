@@ -546,8 +546,8 @@ class DCMQtreePy(QMainWindow):
         # anything it cannot represent (private elements, OB/OW bytes) must survive.
         modified_ds = deepcopy(self.current_dataset)
         modified_ds.ensure_file_meta()
-        modified_ds.is_implicit_VR = False
-        modified_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
+        modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
+        modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID != pydicom.uid.ExplicitVRLittleEndian
         dcmwrite(path, modified_ds, write_like_original=False)
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
