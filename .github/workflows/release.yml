@@ -593,9 +593,68 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.verify-inputs.outputs.tag }}
         run: |
+          # #46 finding 5. The gate above proved the tag was FREE at publish time, so any release
+          # object on TAG afterward was created by THIS run — that invariant, not an output flag, is
+          # what lets cleanup run safely even when create half-fails. If I gated cleanup on an output
+          # I write after `gh release create`, a mid-create failure (release object made, asset upload
+          # dies) would exit non-zero BEFORE the flag is set — cleanup would skip and leak the exact
+          # partial release #5 was written to remove. So create just runs; cleanup decides by asking
+          # the authenticated API whether a release now exists on the tag that was free moments ago.
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --generate-notes \
             --title "dcmQTreePy $TAG" \
             release-assets/*
           gh release view "$TAG" --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
+      - name: Cleanup partial release on failure (delete release + tag, leave run red)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.verify-inputs.outputs.tag }}
+        run: |
+          # #46 finding 5 (cyril). `if: failure()` — so this runs on ANY publish-step failure,
+          # INCLUDING the case where `gh release create` itself half-failed (created the object,
+          # an asset upload died). The tag-free gate proved nothing pre-existing on TAG, so if a
+          # release exists here it is ours to remove. Deletes the release, then its own git tag
+          # (gh release delete only removes the tag with --cleanup-tag), verifying BOTH are gone via
+          # the AUTHENTICATED API. If no release exists (create failed cleanly before making one),
+          # there is nothing to clean and we note that — never deleting a tag we did not create.
+          # No swallowed errors (the #34-blocker-1 shape cyril reviewed). Run stays red BY DESIGN.
+          set -u
+          # First: is there actually a release on TAG to clean? (authenticated read)
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "no release present on $TAG at cleanup — nothing to delete (create failed before making one)"
+            # If the RELEASE never appeared, could a bare TAG still exist? Check the ref, authenticated.
+            TRC=0
+            gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" --silent >/dev/null 2>&1 || TRC=$?
+            if [ "$TRC" -eq 0 ]; then
+              echo "::error::a bare tag $TAG exists but no release — delete the orphan tag manually"
+            fi
+            # Re-surface the original failure; run stays red.
+            echo "::error::publish failed after attempting gh release create — nothing to clean, run intentionally red"
+            exit 1
+          fi
+          echo "found release on $TAG created by this run — cleaning up partial release + tag"
+          RC=0
+          gh release delete "$TAG" --yes --cleanup-tag || RC=$?
+          echo "gh release delete exited $RC"
+          CLEAN_OK=1
+          # Proof of absence via the AUTHENTICATED API (GH_TOKEN), NOT git ls-remote — this repo is
+          # private and checkout ran persist-credentials:false, so an unauthenticated ls-remote returning
+          # empty would falsely read as 'gone'. gh release view fails on a deleted release; the git-refs
+          # endpoint returns 404 on a deleted tag. Both are authenticated, so an absence is real.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::release $TAG still exists after cleanup delete"; CLEAN_OK=0
+          fi
+          OUT="$(gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" 2>&1 || true)"
+          case "$OUT" in
+            *"Not Found"*|*"404"*) echo "tag $TAG verified gone (404)" ;;
+            *) echo "::error::tag $TAG absence UNVERIFIED or still present — lookup did not return a clean 404: $OUT"; CLEAN_OK=0 ;;
+          esac
+          if [ "$CLEAN_OK" -eq 1 ]; then
+            echo "cleanup OK: partial release $TAG deleted and tag verified gone via authenticated API; run left red on purpose"
+          else
+            echo "cleanup INCOMPLETE — residue/UNVERIFIED above; a human must delete the partial release $TAG manually"
+          fi
+          echo "::error::publish failed after gh release create — partial release $TAG cleaned (see log); this run is intentionally red"
+          exit 1
