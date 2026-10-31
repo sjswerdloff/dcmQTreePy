@@ -1381,7 +1381,8 @@ class TestCoraReproNestedOps:
         w.on_add_element()
         assert any("refused" in t.lower() for t in fired), f"no refusal dialog: {fired}"
         s = _save(w)
-        assert "PatientID" in s, "refused add should not have modified the dataset"
+        assert s.PatientID == "BASE", "refused add modified root"
+        assert not s.OtherPatientIDsSequence[0].get("PatientID"), "refused add landed in item"
 
     def test_deleted_row_drops_pending_error(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
@@ -1394,3 +1395,29 @@ class TestCoraReproNestedOps:
         w.dcm_tree_widget.setCurrentItem(row)
         w.handle_tree_delete_pressed(None)
         assert len(w._pending_errors) == 0, "deleted row kept its pending error"
+
+    def test_delete_item_drops_descendant_errors(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        ds = _base()
+        item = pydicom.Dataset()
+        item.InstanceNumber = "5"
+        ds.OtherPatientIDsSequence = pydicom.Sequence([item])
+        top = _render_base(w, ds)
+        # find the nested InstanceNumber and make a bad edit
+        seq_header = _find_row(top, "(0010, 1002)")
+        nested_row = None
+        for k in range(seq_header.childCount()):
+            child = seq_header.child(k)
+            for j in range(child.childCount()):
+                if child.child(j).text(0) == "(0020, 0013)":
+                    nested_row = child.child(j)
+                    break
+        assert nested_row is not None
+        nested_row.setText(2, "bad-value")
+        assert len(w._pending_errors) == 1
+        # delete the item (which removes the nested row)
+        item_row = seq_header.child(0)
+        w.dcm_tree_widget.setCurrentItem(item_row)
+        w.handle_tree_delete_pressed(None)
+        assert len(w._pending_errors) == 0, "deleted item kept descendant errors"

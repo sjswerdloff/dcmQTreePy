@@ -784,6 +784,12 @@ class DCMQtreePy(QMainWindow):
             pass
         self.has_edits = True
 
+    def _drop_pending_errors_for_subtree(self, item: QTreeWidgetItem) -> None:
+        """Drop pending errors for a row and all its descendants (cora: removed subtrees)."""
+        self._pending_errors.pop(id(item), None)
+        for i in range(item.childCount()):
+            self._drop_pending_errors_for_subtree(item.child(i))
+
     def _resolve_add_target(self, item: QTreeWidgetItem):
         """Return the dataset where new children of this row belong.
         Item row → that item's dataset. Element row → the row's dataset.
@@ -923,7 +929,7 @@ class DCMQtreePy(QMainWindow):
                                 # Delete the creator element itself
                                 try:
                                     del parent_ds[pydicom.tag.Tag(tag)]
-                                    self._pending_errors.pop(id(selected_item), None)
+                                    self._drop_pending_errors_for_subtree(selected_item)
                                 except KeyError:
                                     self.non_native_warning_message(
                                         "Delete failed",
@@ -943,7 +949,7 @@ class DCMQtreePy(QMainWindow):
                         seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
                         if seq_elem is not None and seq_elem.VR == "SQ":
                             del seq_elem.value[item_idx]
-                            self._pending_errors.pop(id(selected_item), None)
+                            self._drop_pending_errors_for_subtree(selected_item)
                 else:
                     # Deleting a regular element
                     parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
@@ -960,7 +966,7 @@ class DCMQtreePy(QMainWindow):
                             return
                     try:
                         del parent_ds[pydicom.tag.Tag(tag)]
-                        self._pending_errors.pop(id(selected_item), None)
+                        self._drop_pending_errors_for_subtree(selected_item)
                         # Cyril 2026-11-01: keep empty items — do NOT prune here
                         # Track emptied private blocks for creator prune (cora 13021 #4)
                         # Only track root-level creators — nested items may share names
