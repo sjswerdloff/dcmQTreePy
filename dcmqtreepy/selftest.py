@@ -18,8 +18,10 @@ itself (``dcmQTreePy --selftest``), which proves the bundle end to end:
   save path ``_save_dataset_to`` (the one ``on_file_save_as`` calls and that ships) and
   asserts the bytes are identical to the input, plus determinism (two saves identical).
   Refs #55: this replaced a self-contained pydicom copy that had drifted from the app's
-  logic — a regression in ``_save_dataset_to`` (transfer-syntax loss, over-pruning, a bad
-  atomic write) would not have failed the copy, so it must fail through the real call.
+  logic — a regression in ``_save_dataset_to`` (over-pruning, a bad atomic write) would not
+  have failed the copy, so it must fail through the real call. A transfer-syntax change is
+  not exercised by this byte-compare (connor's #56 review): CT_small is already Explicit VR
+  LE, so forcing ELE is byte-identical and the sample cannot surface it — #50 owns that test.
 - decodes a signed JPEG 2000 Lossless image made in memory and asserts it equals its
   source (#39), which in a packaged build also proves pylibjpeg's plugin was bundled.
 
@@ -271,9 +273,12 @@ def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None, repor
         # Stage 2: save it back through the app's REAL save path and byte-compare.
         # #55: this MUST go through widget._save_dataset_to (what on_file_save_as calls and
         # what ships), NOT a self-contained copy. A regression in _save_dataset_to — pruning
-        # too much, losing transfer syntax, a bad atomic write — must fail the release self-test
-        # that runs on the shipped dmg. For an unmodified dataset the real save is byte-identical
-        # to the source (verified this host, CT_small, offscreen); two saves must also agree.
+        # too much, or a bad atomic write — fails the release self-test that runs on the shipped
+        # dmg. Note (connor's #56 review): byte-equality to the input catches changes to the
+        # *bytes written*; it does NOT specifically exercise a transfer-syntax change, because
+        # CT_small is already Explicit VR LE and forcing ELE again is byte-identical. #50 owns a
+        # dedicated non-ELE save regression test. For an unmodified dataset the real save IS
+        # byte-identical to the source (verified this host, CT_small, offscreen); two saves agree.
         try:
             widget._save_dataset_to(out_path)
         except Exception as exc:
