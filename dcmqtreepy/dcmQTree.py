@@ -100,7 +100,7 @@ class DCMQtreePy(QMainWindow):
         self.reverting_list_item = False
         self.current_dataset = Dataset()
         self._delete_journal = []
-        self._pruned_creators: set[str] = set()
+        self._pruned_creators: list[tuple] = []  # (creator_tag, dataset_ref) for exact prune
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         logging.info("Loading Known Private Dictionaries")
@@ -511,6 +511,7 @@ class DCMQtreePy(QMainWindow):
             ds = dcmread(path, force=True)
             # ds.remove_private_tags() # temporarily, until save as is working.
             self.current_dataset = ds
+            self._pending_error = None  # clear per-file (cora 13021 #8)
             self.dcm_tree_widget.blockSignals(True)
             self.dcm_tree_widget.clear()
             tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
@@ -529,15 +530,13 @@ class DCMQtreePy(QMainWindow):
             return
         path = Path(file_name)
         self.previous_save_path = path.parent
-        self._save_dataset_to(path)
-        self.has_edits = False
+        self._perform_save(str(path))
 
     def on_file_save(self):
         file_name = self.current_list_item.text()
         path = Path(file_name)
         self.previous_save_path = path.parent
-        self._save_dataset_to(path)
-        self.has_edits = False
+        self._perform_save(str(path))
 
     def _set_item_dirty(self, item: QTreeWidgetItem, column: int) -> None:
         """Mark a tree cell as edited/dirty so save can detect ghost rows."""
@@ -560,7 +559,11 @@ class DCMQtreePy(QMainWindow):
                         QMessageBox.Ok,
                     )
                     return False
-        self._save_dataset_to(Path(path))
+        try:
+            self._save_dataset_to(Path(path))
+        except ValueError as e:
+            self.non_native_warning_message("Save refused", str(e), QMessageBox.Ok)
+            return False
         self.has_edits = False
         return True
 
@@ -582,28 +585,28 @@ class DCMQtreePy(QMainWindow):
     def _save_dataset_to(self, path: Path) -> None:
         if hasattr(self, "_pending_error") and self._pending_error is not None:
             raise self._pending_error
+        # Prune creators emptied this session (cora 13021 #4) — exact tags, re-check at save
+        if self._pruned_creators:
+            for creator_tag, ds_ref in self._pruned_creators:
+                if ds_ref is self.current_dataset and creator_tag in self.current_dataset:
+                    block_byte = creator_tag.element
+                    group = creator_tag.group
+                    # Re-check the block is still empty (member may have been added)
+                    has_members = any(
+                        k.group == group and k.element >> 8 == block_byte and k.element != block_byte
+                        for k in self.current_dataset.keys()
+                    )
+                    if not has_members:
+                        del self.current_dataset[creator_tag]
+            self._pruned_creators.clear()
         # Save from current_dataset, not from the tree (issue #35). The tree is a view;
         # anything it cannot represent (private elements, OB/OW bytes) must survive.
         modified_ds = deepcopy(self.current_dataset)
-        # Prune creators emptied this session (cora 13021 #4)
-        if self._pruned_creators:
-            for creator_name in self._pruned_creators:
-                for group in set(k.group for k in modified_ds.keys() if k.group % 2 == 1):
-                    creator_tag = None
-                    for k in list(modified_ds.keys()):
-                        if k.group == group and k.element < 0x0100 and modified_ds[k].value == creator_name:
-                            creator_tag = k
-                            break
-                    if creator_tag is not None:
-                        block_byte = creator_tag.element
-                        del modified_ds[creator_tag]
-                        for k in list(modified_ds.keys()):
-                            if k.group == group and k.element >> 8 == block_byte and k.element != block_byte:
-                                del modified_ds[k]
-            self._pruned_creators.clear()
         modified_ds.ensure_file_meta()
-        modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
-        modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID != pydicom.uid.ExplicitVRLittleEndian
+        # Keep source transfer syntax (cora 13021 #5) — don't force explicit LE
+        if not modified_ds.file_meta.TransferSyntaxUID:
+            modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
+        modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
         dcmwrite(path, modified_ds, write_like_original=False)
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
@@ -629,7 +632,13 @@ class DCMQtreePy(QMainWindow):
                 element_value = value_list
 
         public_element.value = element_value
-        self.current_dataset[public_element.tag] = public_element
+        # Resolve target dataset from tree position (cora 13021 #6)
+        target_ds = self.current_dataset
+        if self.dcm_tree_widget is not None:
+            selected_items = self.dcm_tree_widget.selectedItems()
+            if selected_items is not None and len(selected_items) > 0:
+                target_ds, _, _, _ = self._find_parent_dataset(selected_items[0])
+        target_ds[public_element.tag] = public_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
@@ -671,7 +680,13 @@ class DCMQtreePy(QMainWindow):
             else:
                 element_value = value_list
         private_element.value = element_value
-        self.current_dataset[private_element.tag] = private_element
+        # Resolve target dataset from tree position (cora 13021 #6)
+        target_ds = self.current_dataset
+        if self.dcm_tree_widget is not None:
+            selected_items = self.dcm_tree_widget.selectedItems()
+            if selected_items is not None and len(selected_items) > 0:
+                target_ds, _, _, _ = self._find_parent_dataset(selected_items[0])
+        target_ds[private_element.tag] = private_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
@@ -735,8 +750,10 @@ class DCMQtreePy(QMainWindow):
         tag_as_string = item.text(0)
         tag = self._convert_tag_as_string_to_tuple(tag_as_string)
         new_value = item.text(2)
+        # Resolve the row's own dataset from its ancestor chain (cora 13021 #1)
+        parent_ds, _, _, _ = self._find_parent_dataset(item)
         try:
-            elem = self.current_dataset[pydicom.tag.Tag(tag)]
+            elem = parent_ds[pydicom.tag.Tag(tag)]
             if elem.VR in ("SS", "US", "SL", "UL"):
                 elem.value = int(new_value)
             elif elem.VR in ("FL", "FD", "DS"):
@@ -761,25 +778,65 @@ class DCMQtreePy(QMainWindow):
         if "(" not in parent_tag_str:
             return self.current_dataset, False, None, None
         parent_tag = self._convert_tag_as_string_to_tuple(parent_tag_str)
-        # If the item itself is a sequence item, parent is the sequence header
-        if item.text(2).isdigit():
+        # If the item itself is a sequence item (tag matches parent + numeric value)
+        if item.text(2).isdigit() and item.text(0) == parent.text(0):
             seq_elem = self.current_dataset.get(pydicom.tag.Tag(parent_tag))
             if seq_elem is not None and seq_elem.VR == "SQ":
                 item_idx = int(item.text(2)) - 1
                 return self.current_dataset, True, parent_tag, item_idx
             return self.current_dataset, False, None, None
-        # If parent is a sequence item, go one level up
-        if parent.text(2).isdigit():
-            grandparent = parent.parent()
-            if grandparent is not None:
-                gp_tag = self._convert_tag_as_string_to_tuple(grandparent.text(0))
-                seq_elem = self.current_dataset.get(pydicom.tag.Tag(gp_tag))
+        # Climb through nested sequence items recursively
+        current = item
+        current_parent = item.parent()
+        while current_parent is not None:
+            current_tag_str = current_parent.text(0)
+            if "(" not in current_tag_str:
+                break
+            if current.text(2).isdigit() and current.text(0) == current_parent.text(0):
+                # current is a sequence item under current_parent (sequence header)
+                seq_tag = self._convert_tag_as_string_to_tuple(current_tag_str)
+                # Find the dataset that owns this sequence by climbing further
+                owner_ds = self._find_sequence_owner(current_parent)
+                seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
                 if seq_elem is not None and seq_elem.VR == "SQ":
-                    item_idx = int(parent.text(2)) - 1
+                    item_idx = int(current.text(2)) - 1
                     if 0 <= item_idx < len(seq_elem.value):
-                        return seq_elem.value[item_idx], True, gp_tag, item_idx
-            return self.current_dataset, False, None, None
+                        return seq_elem.value[item_idx], True, seq_tag, item_idx
+                return self.current_dataset, False, None, None
+            current = current_parent
+            current_parent = current_parent.parent()
         return self.current_dataset, False, None, None
+
+    def _find_sequence_owner(self, header_item: QTreeWidgetItem):
+        """Find the Dataset that owns a sequence header row."""
+        parent = header_item.parent()
+        if parent is None:
+            return self.current_dataset
+        parent_tag_str = parent.text(0)
+        if "(" not in parent_tag_str:
+            return self.current_dataset
+        # If parent is a sequence item, recurse
+        if header_item.text(2).isdigit() and header_item.text(0) == parent.text(0):
+            return self._find_sequence_owner(parent)
+        # Climb through nested items
+        current = header_item
+        current_parent = header_item.parent()
+        while current_parent is not None:
+            ct_str = current_parent.text(0)
+            if "(" not in ct_str:
+                break
+            if current.text(2).isdigit() and current.text(0) == current_parent.text(0):
+                seq_tag = self._convert_tag_as_string_to_tuple(ct_str)
+                owner = self._find_sequence_owner(current_parent)
+                seq_elem = owner.get(pydicom.tag.Tag(seq_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ":
+                    item_idx = int(current.text(2)) - 1
+                    if 0 <= item_idx < len(seq_elem.value):
+                        return seq_elem.value[item_idx]
+                return self.current_dataset
+            current = current_parent
+            current_parent = current_parent.parent()
+        return self.current_dataset
 
     def handle_tree_delete_pressed(self, event):
         if self.dcm_tree_widget is not None:
@@ -799,25 +856,34 @@ class DCMQtreePy(QMainWindow):
                             tag_as_string2 = next_child.text(0)
                             tag2 = self._convert_tag_as_string_to_tuple(tag_as_string2)
                             if tag2[0] % 2 == 1:
-                                # Delete only members of THIS block (block byte match)
+                                # Delete only members of THIS block (same group + block byte)
                                 for j in range(parent.childCount() - 1, child_index, -1):
                                     member = parent.child(j)
                                     member_tag = self._convert_tag_as_string_to_tuple(member.text(0))
-                                    if member_tag[0] % 2 == 1 and member_tag[1] >> 8 == private_block_byte:
-                                        parent.takeChild(j)
+                                    if member_tag[0] == tag[0] and member_tag[1] >> 8 == private_block_byte:
                                         try:
                                             del self.current_dataset[pydicom.tag.Tag(member_tag)]
+                                            parent.takeChild(j)
                                         except KeyError:
-                                            pass
+                                            self.non_native_warning_message(
+                                                "Delete failed",
+                                                f"Element {member.text(0)} not found in dataset.",
+                                                QMessageBox.Ok,
+                                            )
+                                            return
                                 # Delete the creator element itself
                                 try:
                                     del self.current_dataset[pydicom.tag.Tag(tag)]
                                 except KeyError:
-                                    pass
+                                    self.non_native_warning_message(
+                                        "Delete failed",
+                                        f"Creator {tag_as_string} not found in dataset.",
+                                        QMessageBox.Ok,
+                                    )
+                                    return
                                 parent.takeChild(child_index)
                                 self.has_edits = True
                                 return
-                print(f"CHECK: text2={selected_item.text(2)} isdigit={selected_item.text(2).isdigit()}")
                 # Sequence items share their parent tag and have numeric text(2)
                 is_seq_item = selected_item.text(2).isdigit() and selected_item.text(0) == parent.text(0)
                 if is_seq_item:
@@ -863,10 +929,14 @@ class DCMQtreePy(QMainWindow):
                                         has_members = True
                                         break
                                 if not has_members:
-                                    creator_name = parent_ds[creator_tag].value
-                                    self._pruned_creators.add(creator_name)
+                                    self._pruned_creators.append((creator_tag, parent_ds))
                     except KeyError:
-                        pass
+                        self.non_native_warning_message(
+                            "Delete failed",
+                            f"Element {tag_as_string} not found in dataset.",
+                            QMessageBox.Ok,
+                        )
+                        return
                 parent.takeChild(child_index)
                 self.has_edits = True
 
