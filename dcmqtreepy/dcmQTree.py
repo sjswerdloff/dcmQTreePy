@@ -3,6 +3,7 @@ import atexit
 import logging
 import os
 import sys
+from copy import deepcopy
 from decimal import Decimal
 from pathlib import Path
 
@@ -31,7 +32,6 @@ from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
     QMessageBox,
     QTreeWidget,
     QTreeWidgetItem,
-    QTreeWidgetItemIterator,
     QWhatsThis,
 )
 
@@ -77,6 +77,7 @@ class DCMQtreePy(QMainWindow):
         # header.setStretchLastSection(False)
         # header.setSectionResizeMode(5, QHeaderView.Stretch)
         self.dcm_tree_widget.itemDoubleClicked.connect(self.on_tree_widget_item_double_clicked)
+        self.dcm_tree_widget.itemChanged.connect(self.on_tree_item_changed)
         self.ui.listWidget.itemSelectionChanged.connect(self.on_item_selection_changed)
         #     self.tree_del_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.dcm_tree_widget)
         #     self.tree_del_shortcut.activated.connect(self.handle_tree_delete_pressed)
@@ -98,6 +99,8 @@ class DCMQtreePy(QMainWindow):
         self.current_list_item = None
         self.reverting_list_item = False
         self.current_dataset = Dataset()
+        self._pruned_creators: list[tuple] = []  # (creator_tag, dataset_ref) for exact prune
+        self._pending_errors: dict[int, Exception] = {}  # keyed by id(row) — same tag in root+item are distinct
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         logging.info("Loading Known Private Dictionaries")
@@ -508,6 +511,8 @@ class DCMQtreePy(QMainWindow):
             ds = dcmread(path, force=True)
             # ds.remove_private_tags() # temporarily, until save as is working.
             self.current_dataset = ds
+            self._pending_errors.clear()  # clear per-file (cora 13021 #8)
+            self.dcm_tree_widget.blockSignals(True)
             self.dcm_tree_widget.clear()
             tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
             context = build_context(ds.SOPClassUID)
@@ -515,6 +520,7 @@ class DCMQtreePy(QMainWindow):
             tree_child_item.setText(0, abstract_syntax)
             self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
             tree_child_item.setExpanded(True)
+            self.dcm_tree_widget.blockSignals(False)
             self.has_edits = False
 
     def on_file_save_as(self):
@@ -524,53 +530,85 @@ class DCMQtreePy(QMainWindow):
             return
         path = Path(file_name)
         self.previous_save_path = path.parent
-        iterator = QTreeWidgetItemIterator(self.dcm_tree_widget)
-        tree_child_item = iterator.__next__().value()
-        modified_ds = Dataset()
-
-        # modified_ds.is_little_endian = True
-
-        for child_index in range(tree_child_item.childCount()):
-            child = tree_child_item.child(child_index)
-            self._populate_dataset_from_tree_widget_item(parent_ds=modified_ds, tree_widget_item=child)
-
-        if "PixelData" in self.current_dataset:
-            modified_ds["PixelData"] = self.current_dataset["PixelData"]
-        # modified_ds.fix_meta_info(enforce_standard=False)
-        modified_ds.ensure_file_meta()
-        #
-        modified_ds.is_implicit_VR = False
-        modified_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
-        # del modified_ds[0x300a0782]
-        # modified_ds.remove_private_tags() # temporary... first get save as working for public elements
-        dcmwrite(Path(file_name), modified_ds, write_like_original=False)
-        self.has_edits = False  # not quite true, but the data has been saved, so switching and losing the current edits is OK.
+        self._perform_save(str(path))
 
     def on_file_save(self):
         file_name = self.current_list_item.text()
         path = Path(file_name)
         self.previous_save_path = path.parent
-        iterator = QTreeWidgetItemIterator(self.dcm_tree_widget)
-        tree_child_item = iterator.__next__().value()
-        modified_ds = Dataset()
+        self._perform_save(str(path))
 
-        # modified_ds.is_little_endian = True
+    def _set_item_dirty(self, item: QTreeWidgetItem, column: int) -> None:
+        """Mark a tree cell as edited/dirty so save can detect ghost rows."""
+        item.setData(column, Qt.ItemDataRole.UserRole, True)
 
-        for child_index in range(tree_child_item.childCount()):
-            child = tree_child_item.child(child_index)
-            self._populate_dataset_from_tree_widget_item(parent_ds=modified_ds, tree_widget_item=child)
+    def _perform_save(self, path: str) -> bool:
+        """Save with a pre-flight check: refuse if ghost rows exist.
 
-        if "PixelData" in self.current_dataset:
-            modified_ds["PixelData"] = self.current_dataset["PixelData"]
-        # modified_ds.fix_meta_info(enforce_standard=False)
+        Returns True on successful save, False on refusal.
+        """
+        # Check for ghost rows — edited rows whose elements can't be resolved
+        if self.dcm_tree_widget is not None:
+            top = self.dcm_tree_widget.topLevelItem(0)
+            if top is not None:
+                ghosts = self._find_ghost_rows(top)
+                if ghosts:
+                    self.non_native_warning_message(
+                        "Save refused",
+                        f"Unresolvable edited rows: {', '.join(ghosts)}",
+                        QMessageBox.Ok,
+                    )
+                    return False
+        try:
+            self._save_dataset_to(Path(path))
+        except ValueError as e:
+            self.non_native_warning_message("Save refused", str(e), QMessageBox.Ok)
+            return False
+        self.has_edits = False
+        return True
+
+    def _find_ghost_rows(self, item: QTreeWidgetItem) -> list[str]:
+        """Find dirty rows whose tags are not in current_dataset."""
+        ghosts = []
+        if item.data(2, Qt.ItemDataRole.UserRole):
+            tag_str = item.text(0)
+            try:
+                tag = self._convert_tag_as_string_to_tuple(tag_str)
+                if pydicom.tag.Tag(tag) not in self.current_dataset:
+                    ghosts.append(tag_str)
+            except (ValueError, TypeError):
+                ghosts.append(tag_str)
+        for i in range(item.childCount()):
+            ghosts.extend(self._find_ghost_rows(item.child(i)))
+        return ghosts
+
+    def _save_dataset_to(self, path: Path) -> None:
+        if self._pending_errors:
+            msgs = [str(e) for e in self._pending_errors.values()]
+            raise ValueError("; ".join(msgs))
+        # Prune creators emptied this session (cora 13021 #4) — exact tags, re-check at save
+        if self._pruned_creators:
+            for creator_tag, ds_ref in self._pruned_creators:
+                if ds_ref is self.current_dataset and creator_tag in self.current_dataset:
+                    block_byte = creator_tag.element
+                    group = creator_tag.group
+                    # Re-check the block is still empty (member may have been added)
+                    has_members = any(
+                        k.group == group and k.element >> 8 == block_byte and k.element != block_byte
+                        for k in self.current_dataset.keys()
+                    )
+                    if not has_members:
+                        del self.current_dataset[creator_tag]
+            self._pruned_creators.clear()
+        # Save from current_dataset, not from the tree (issue #35). The tree is a view;
+        # anything it cannot represent (private elements, OB/OW bytes) must survive.
+        modified_ds = deepcopy(self.current_dataset)
         modified_ds.ensure_file_meta()
-        #
-        modified_ds.is_implicit_VR = False
-        modified_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
-        # del modified_ds[0x300a0782]
-        # modified_ds.remove_private_tags() # temporary... first get save as working for public elements
-        dcmwrite(Path(file_name), modified_ds, write_like_original=False)
-        self.has_edits = False  # not quite true, but the data has been saved, so switching and losing the current edits is OK.
+        # Keep source transfer syntax (cora 13021 #5) — don't force explicit LE
+        if not modified_ds.file_meta.TransferSyntaxUID:
+            modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
+        modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
+        dcmwrite(path, modified_ds, write_like_original=False)
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
@@ -596,6 +634,20 @@ class DCMQtreePy(QMainWindow):
                 element_value = value_list
 
         public_element.value = element_value
+        # Resolve target dataset (connor: single function)
+        target_ds = self.current_dataset
+        if self.dcm_tree_widget is not None:
+            selected_items = self.dcm_tree_widget.selectedItems()
+            if selected_items is not None and len(selected_items) > 0:
+                target_ds = self._resolve_add_target(selected_items[0])
+                if target_ds is None:
+                    self.non_native_warning_message(
+                        "Add refused",
+                        "An element cannot be added directly to a sequence header. Select an item or element row.",
+                        QMessageBox.Ok,
+                    )
+                    return
+        target_ds[public_element.tag] = public_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
@@ -637,6 +689,20 @@ class DCMQtreePy(QMainWindow):
             else:
                 element_value = value_list
         private_element.value = element_value
+        # Resolve target dataset (connor: single function)
+        target_ds = self.current_dataset
+        if self.dcm_tree_widget is not None:
+            selected_items = self.dcm_tree_widget.selectedItems()
+            if selected_items is not None and len(selected_items) > 0:
+                target_ds = self._resolve_add_target(selected_items[0])
+                if target_ds is None:
+                    self.non_native_warning_message(
+                        "Add refused",
+                        "An element cannot be added directly to a sequence header. Select an item or element row.",
+                        QMessageBox.Ok,
+                    )
+                    return
+        target_ds[private_element.tag] = private_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
@@ -694,6 +760,138 @@ class DCMQtreePy(QMainWindow):
         self.ui.listWidget.takeItem(current_row)
 
     @Slot()
+    def on_tree_item_changed(self, item: QTreeWidgetItem, column: int):
+        if column != 2:
+            return
+        tag_as_string = item.text(0)
+        tag = self._convert_tag_as_string_to_tuple(tag_as_string)
+        new_value = item.text(2)
+        # Resolve the row's own dataset from its ancestor chain (cora 13021 #1)
+        parent_ds, _, _, _ = self._find_parent_dataset(item)
+        try:
+            elem = parent_ds[pydicom.tag.Tag(tag)]
+            if elem.VR in ("SS", "US", "SL", "UL"):
+                elem.value = int(new_value)
+            elif elem.VR in ("FL", "FD", "DS"):
+                elem.value = float(new_value)
+            elif elem.VR == "SQ":
+                pass
+            else:
+                elem.value = new_value
+            # Clear per-row error on success (cora: correcting a bad edit unblocks save)
+            self._pending_errors.pop(id(item), None)
+        except (KeyError, ValueError) as e:
+            self._pending_errors[id(item)] = ValueError(f"{tag_as_string}: {e}")
+            pass
+        self.has_edits = True
+
+    def _drop_pending_errors_for_subtree(self, item: QTreeWidgetItem) -> None:
+        """Drop pending errors for a row and all its descendants (cora: removed subtrees)."""
+        self._pending_errors.pop(id(item), None)
+        for i in range(item.childCount()):
+            self._drop_pending_errors_for_subtree(item.child(i))
+
+    def _resolve_add_target(self, item: QTreeWidgetItem):
+        """Return the dataset where new children of this row belong.
+        Item row → that item's dataset. Element row → the row's dataset.
+        Sequence header → None (an element can't sit directly in a sequence).
+        (connor: single function, matching the tree's own rule)
+        """
+        # Sequence header (not an item): refuse (cora: element can't sit in a sequence)
+        if item.text(3) == "SQ" and not item.text(2).isdigit():
+            return None
+        parent = item.parent()
+        if parent is None:
+            return self.current_dataset
+        parent_tag_str = parent.text(0)
+        if "(" not in parent_tag_str:
+            return self.current_dataset
+        # Item row: tag matches parent + numeric value
+        if item.text(2).isdigit() and item.text(0) == parent.text(0):
+            parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(item)
+            if is_sq and seq_tag is not None:
+                seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ" and 0 <= item_idx < len(seq_elem.value):
+                    return seq_elem.value[item_idx]
+            return self.current_dataset
+        # Element row: the dataset that holds this element
+        parent_ds, _, _, _ = self._find_parent_dataset(item)
+        return parent_ds
+
+    def _find_parent_dataset(self, item: QTreeWidgetItem):
+        """Walk up the tree to find the Dataset that holds this element.
+        Returns (parent_ds, is_sequence_item, seq_tag, item_index).
+        """
+        parent = item.parent()
+        if parent is None:
+            return self.current_dataset, False, None, None
+        parent_tag_str = parent.text(0)
+        if "(" not in parent_tag_str:
+            return self.current_dataset, False, None, None
+        parent_tag = self._convert_tag_as_string_to_tuple(parent_tag_str)
+        # If the item itself is a sequence item (tag matches parent + numeric value)
+        if item.text(2).isdigit() and item.text(0) == parent.text(0):
+            seq_tag = parent_tag
+            # Resolve the dataset that owns this sequence (cora: nested seq-item)
+            owner_ds = self._find_sequence_owner(parent)
+            seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
+            if seq_elem is not None and seq_elem.VR == "SQ":
+                item_idx = int(item.text(2)) - 1
+                return owner_ds, True, seq_tag, item_idx
+            return self.current_dataset, False, None, None
+        # Climb through nested sequence items recursively
+        current = item
+        current_parent = item.parent()
+        while current_parent is not None:
+            current_tag_str = current_parent.text(0)
+            if "(" not in current_tag_str:
+                break
+            if current.text(2).isdigit() and current.text(0) == current_parent.text(0):
+                # current is a sequence item under current_parent (sequence header)
+                seq_tag = self._convert_tag_as_string_to_tuple(current_tag_str)
+                # Find the dataset that owns this sequence by climbing further
+                owner_ds = self._find_sequence_owner(current_parent)
+                seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ":
+                    item_idx = int(current.text(2)) - 1
+                    if 0 <= item_idx < len(seq_elem.value):
+                        return seq_elem.value[item_idx], True, seq_tag, item_idx
+                return self.current_dataset, False, None, None
+            current = current_parent
+            current_parent = current_parent.parent()
+        return self.current_dataset, False, None, None
+
+    def _find_sequence_owner(self, header_item: QTreeWidgetItem):
+        """Find the Dataset that owns a sequence header row."""
+        parent = header_item.parent()
+        if parent is None:
+            return self.current_dataset
+        parent_tag_str = parent.text(0)
+        if "(" not in parent_tag_str:
+            return self.current_dataset
+        # If parent is a sequence item, recurse
+        if header_item.text(2).isdigit() and header_item.text(0) == parent.text(0):
+            return self._find_sequence_owner(parent)
+        # Climb through nested items
+        current = header_item
+        current_parent = header_item.parent()
+        while current_parent is not None:
+            ct_str = current_parent.text(0)
+            if "(" not in ct_str:
+                break
+            if current.text(2).isdigit() and current.text(0) == current_parent.text(0):
+                seq_tag = self._convert_tag_as_string_to_tuple(ct_str)
+                owner = self._find_sequence_owner(current_parent)
+                seq_elem = owner.get(pydicom.tag.Tag(seq_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ":
+                    item_idx = int(current.text(2)) - 1
+                    if 0 <= item_idx < len(seq_elem.value):
+                        return seq_elem.value[item_idx]
+                return self.current_dataset
+            current = current_parent
+            current_parent = current_parent.parent()
+        return self.current_dataset
+
     def handle_tree_delete_pressed(self, event):
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -705,19 +903,94 @@ class DCMQtreePy(QMainWindow):
                 tag_as_string = selected_item.text(0)
                 tag = self._convert_tag_as_string_to_tuple(tag_as_string)
                 if tag[0] % 2 == 1:
-                    private_block_byte = tag[1] % 256  # lower 8 bits...
-                    if private_block_byte == 0x10:
-                        # is_private_creator = True
+                    private_block_byte = tag[1] % 256
+                    if tag[1] >= 0x0010 and tag[1] <= 0x00FF:
+                        # Resolve the row's own dataset (cora: nested creator delete)
+                        parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
                         next_child = parent.child(child_index + 1)
-                        tag_as_string = next_child.text(0)
-                        tag = self._convert_tag_as_string_to_tuple(tag_as_string)
-                        if tag[0] % 2 == 1:
+                        if next_child is not None:
+                            tag_as_string2 = next_child.text(0)
+                            tag2 = self._convert_tag_as_string_to_tuple(tag_as_string2)
+                            if tag2[0] % 2 == 1:
+                                # Delete only members of THIS block (same group + block byte)
+                                for j in range(parent.childCount() - 1, child_index, -1):
+                                    member = parent.child(j)
+                                    member_tag = self._convert_tag_as_string_to_tuple(member.text(0))
+                                    if member_tag[0] == tag[0] and member_tag[1] >> 8 == private_block_byte:
+                                        try:
+                                            del parent_ds[pydicom.tag.Tag(member_tag)]
+                                            self._drop_pending_errors_for_subtree(member)
+                                            parent.takeChild(j)
+                                        except KeyError:
+                                            self.non_native_warning_message(
+                                                "Delete failed",
+                                                f"Element {member.text(0)} not found in dataset.",
+                                                QMessageBox.Ok,
+                                            )
+                                            return
+                                # Delete the creator element itself
+                                try:
+                                    del parent_ds[pydicom.tag.Tag(tag)]
+                                    self._drop_pending_errors_for_subtree(selected_item)
+                                except KeyError:
+                                    self.non_native_warning_message(
+                                        "Delete failed",
+                                        f"Creator {tag_as_string} not found in dataset.",
+                                        QMessageBox.Ok,
+                                    )
+                                    return
+                                parent.takeChild(child_index)
+                                self.has_edits = True
+                                return
+                # Sequence items share their parent tag and have numeric text(2)
+                is_seq_item = selected_item.text(2).isdigit() and selected_item.text(0) == parent.text(0)
+                if is_seq_item:
+                    # Deleting a sequence item — resolve owner dataset (cora: nested seq-item)
+                    parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_item)
+                    if is_sq and seq_tag is not None:
+                        seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
+                        if seq_elem is not None and seq_elem.VR == "SQ":
+                            del seq_elem.value[item_idx]
+                            self._drop_pending_errors_for_subtree(selected_item)
+                else:
+                    # Deleting a regular element
+                    parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
+                    # Refuse unresolvable private elements (cora 13021 #3)
+                    if tag[0] % 2 == 1 and tag[1] >= 0x0100:
+                        block_byte = tag[1] >> 8
+                        creator_tag = pydicom.tag.Tag(tag[0], block_byte)
+                        if creator_tag not in parent_ds:
                             self.non_native_warning_message(
-                                "Private Block has private elements",
-                                "Delete private elements in block before deleting Private Creator",
-                                buttons=QMessageBox.Ok,
+                                "Delete refused",
+                                f"Element {tag_as_string} has no private creator — cannot safely delete.",
+                                QMessageBox.Ok,
                             )
                             return
+                    try:
+                        del parent_ds[pydicom.tag.Tag(tag)]
+                        self._drop_pending_errors_for_subtree(selected_item)
+                        # Cyril 2026-11-01: keep empty items — do NOT prune here
+                        # Track emptied private blocks for creator prune (cora 13021 #4)
+                        # Only track root-level creators — nested items may share names
+                        if tag[0] % 2 == 1 and tag[1] >= 0x0100 and parent_ds is self.current_dataset:
+                            block_byte = tag[1] >> 8
+                            creator_tag = pydicom.tag.Tag(tag[0], block_byte)
+                            if creator_tag in parent_ds:
+                                # Check if block is now empty
+                                has_members = False
+                                for k in parent_ds.keys():
+                                    if k.group == tag[0] and k.element >> 8 == block_byte and k.element != block_byte:
+                                        has_members = True
+                                        break
+                                if not has_members:
+                                    self._pruned_creators.append((creator_tag, parent_ds))
+                    except KeyError:
+                        self.non_native_warning_message(
+                            "Delete failed",
+                            f"Element {tag_as_string} not found in dataset.",
+                            QMessageBox.Ok,
+                        )
+                        return
                 parent.takeChild(child_index)
                 self.has_edits = True
 
