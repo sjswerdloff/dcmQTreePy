@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 import atexit
-from copy import deepcopy
 import logging
 import os
 import sys
+from copy import deepcopy
 from decimal import Decimal
 from pathlib import Path
 
@@ -32,7 +32,6 @@ from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
     QMessageBox,
     QTreeWidget,
     QTreeWidgetItem,
-    QTreeWidgetItemIterator,
     QWhatsThis,
 )
 
@@ -101,6 +100,7 @@ class DCMQtreePy(QMainWindow):
         self.reverting_list_item = False
         self.current_dataset = Dataset()
         self._delete_journal = []
+        self._pruned_creators: set[str] = set()
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         logging.info("Loading Known Private Dictionaries")
@@ -539,12 +539,68 @@ class DCMQtreePy(QMainWindow):
         self._save_dataset_to(path)
         self.has_edits = False
 
+    def _set_item_dirty(self, item: QTreeWidgetItem, column: int) -> None:
+        """Mark a tree cell as edited/dirty so save can detect ghost rows."""
+        item.setData(column, Qt.ItemDataRole.UserRole, True)
+
+    def _perform_save(self, path: str) -> bool:
+        """Save with a pre-flight check: refuse if ghost rows exist.
+
+        Returns True on successful save, False on refusal.
+        """
+        # Check for ghost rows — edited rows whose elements can't be resolved
+        if self.dcm_tree_widget is not None:
+            top = self.dcm_tree_widget.topLevelItem(0)
+            if top is not None:
+                ghosts = self._find_ghost_rows(top)
+                if ghosts:
+                    self.non_native_warning_message(
+                        "Save refused",
+                        f"Unresolvable edited rows: {', '.join(ghosts)}",
+                        QMessageBox.Ok,
+                    )
+                    return False
+        self._save_dataset_to(Path(path))
+        self.has_edits = False
+        return True
+
+    def _find_ghost_rows(self, item: QTreeWidgetItem) -> list[str]:
+        """Find dirty rows whose tags are not in current_dataset."""
+        ghosts = []
+        if item.data(2, Qt.ItemDataRole.UserRole):
+            tag_str = item.text(0)
+            try:
+                tag = self._convert_tag_as_string_to_tuple(tag_str)
+                if pydicom.tag.Tag(tag) not in self.current_dataset:
+                    ghosts.append(tag_str)
+            except (ValueError, TypeError):
+                ghosts.append(tag_str)
+        for i in range(item.childCount()):
+            ghosts.extend(self._find_ghost_rows(item.child(i)))
+        return ghosts
+
     def _save_dataset_to(self, path: Path) -> None:
         if hasattr(self, "_pending_error") and self._pending_error is not None:
             raise self._pending_error
         # Save from current_dataset, not from the tree (issue #35). The tree is a view;
         # anything it cannot represent (private elements, OB/OW bytes) must survive.
         modified_ds = deepcopy(self.current_dataset)
+        # Prune creators emptied this session (cora 13021 #4)
+        if self._pruned_creators:
+            for creator_name in self._pruned_creators:
+                for group in set(k.group for k in modified_ds.keys() if k.group % 2 == 1):
+                    creator_tag = None
+                    for k in list(modified_ds.keys()):
+                        if k.group == group and k.element < 0x0100 and modified_ds[k].value == creator_name:
+                            creator_tag = k
+                            break
+                    if creator_tag is not None:
+                        block_byte = creator_tag.element
+                        del modified_ds[creator_tag]
+                        for k in list(modified_ds.keys()):
+                            if k.group == group and k.element >> 8 == block_byte and k.element != block_byte:
+                                del modified_ds[k]
+            self._pruned_creators.clear()
         modified_ds.ensure_file_meta()
         modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
         modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID != pydicom.uid.ExplicitVRLittleEndian
@@ -743,16 +799,23 @@ class DCMQtreePy(QMainWindow):
                             tag_as_string2 = next_child.text(0)
                             tag2 = self._convert_tag_as_string_to_tuple(tag_as_string2)
                             if tag2[0] % 2 == 1:
-                                # Delete all members in this block first
+                                # Delete only members of THIS block (block byte match)
                                 for j in range(parent.childCount() - 1, child_index, -1):
                                     member = parent.child(j)
                                     member_tag = self._convert_tag_as_string_to_tuple(member.text(0))
-                                    if member_tag[0] % 2 == 1:
+                                    if member_tag[0] % 2 == 1 and member_tag[1] >> 8 == private_block_byte:
                                         parent.takeChild(j)
                                         try:
                                             del self.current_dataset[pydicom.tag.Tag(member_tag)]
                                         except KeyError:
                                             pass
+                                # Delete the creator element itself
+                                try:
+                                    del self.current_dataset[pydicom.tag.Tag(tag)]
+                                except KeyError:
+                                    pass
+                                parent.takeChild(child_index)
+                                self.has_edits = True
                                 return
                 print(f"CHECK: text2={selected_item.text(2)} isdigit={selected_item.text(2).isdigit()}")
                 # Sequence items share their parent tag and have numeric text(2)
@@ -768,6 +831,17 @@ class DCMQtreePy(QMainWindow):
                 else:
                     # Deleting a regular element
                     parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
+                    # Refuse unresolvable private elements (cora 13021 #3)
+                    if tag[0] % 2 == 1 and tag[1] >= 0x0100:
+                        block_byte = tag[1] >> 8
+                        creator_tag = pydicom.tag.Tag(tag[0], block_byte)
+                        if creator_tag not in parent_ds:
+                            self.non_native_warning_message(
+                                "Delete refused",
+                                f"Element {tag_as_string} has no private creator — cannot safely delete.",
+                                QMessageBox.Ok,
+                            )
+                            return
                     try:
                         elem = parent_ds.get(pydicom.tag.Tag(tag))
                         kind = "seq" if elem is not None and elem.VR == "SQ" else "element"
@@ -775,16 +849,22 @@ class DCMQtreePy(QMainWindow):
                         if kind == "seq" and elem is not None and len(elem.value) > 0:
                             self._delete_journal.append(("subtree", tag, parent_ds is self.current_dataset))
                         del parent_ds[pydicom.tag.Tag(tag)]
-                        # Remove empty sequence items after element delete
-                        if parent_ds is not self.current_dataset:
-                            gp = selected_item.parent()
-                            if gp is not None and gp.text(2).isdigit():
-                                gp_tag = self._convert_tag_as_string_to_tuple(gp.text(0))
-                                seq_elem = self.current_dataset.get(pydicom.tag.Tag(gp_tag))
-                                if seq_elem is not None and seq_elem.VR == "SQ":
-                                    item_idx = int(gp.text(2)) - 1
-                                    if 0 <= item_idx < len(seq_elem.value) and not seq_elem.value[item_idx]:
-                                        del seq_elem.value[item_idx]
+                        # Cyril 2026-11-01: keep empty items — do NOT prune here
+                        # Track emptied private blocks for creator prune (cora 13021 #4)
+                        # Only track root-level creators — nested items may share names
+                        if tag[0] % 2 == 1 and tag[1] >= 0x0100 and parent_ds is self.current_dataset:
+                            block_byte = tag[1] >> 8
+                            creator_tag = pydicom.tag.Tag(tag[0], block_byte)
+                            if creator_tag in parent_ds:
+                                # Check if block is now empty
+                                has_members = False
+                                for k in parent_ds.keys():
+                                    if k.group == tag[0] and k.element >> 8 == block_byte and k.element != block_byte:
+                                        has_members = True
+                                        break
+                                if not has_members:
+                                    creator_name = parent_ds[creator_tag].value
+                                    self._pruned_creators.add(creator_name)
                     except KeyError:
                         pass
                 parent.takeChild(child_index)

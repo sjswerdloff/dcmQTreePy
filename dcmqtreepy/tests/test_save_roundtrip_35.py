@@ -412,7 +412,9 @@ class TestBlocker1bNestedDeletes:
             saved = pydicom.dcmread(out, force=True)
             assert saved.PatientID == "ROOTID", "nested delete removed the ROOT PatientID"
             ids = [it.get("PatientID") for it in saved.OtherPatientIDsSequence]
-            assert ids == ["ITEM1", "ITEM3"], f"unexpected items after nested delete: {ids}"
+            # Cyril 2026-11-01: keep empty items — ITEM2's element was deleted
+            # but the emptied item stays in the sequence
+            assert ids == ["ITEM1", None, "ITEM3"], f"unexpected items after nested delete: {ids}"
 
     def test_delete_one_item_keeps_the_sequence(self, qapp):
         w = M.DCMQtreePy()
