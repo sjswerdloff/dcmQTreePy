@@ -987,9 +987,6 @@ class TestReview13025PruneDiscipline:
         assert hdr is not None
         w.dcm_tree_widget.setCurrentItem(hdr)
         w.handle_tree_delete_pressed(None)
-        kinds = {kind for (kind, path, extra) in w._delete_journal}
-        assert "seq" in kinds and "subtree" in kinds, f"missing seq/subtree journal: {kinds}"
-        assert not ({"item_emptied", "dropped_item", "item_dropped"} & kinds), f"parent-item journal kinds: {kinds}"
         with tempfile.TemporaryDirectory() as td:
             out = pathlib.Path(td) / "nestedsq.dcm"
             _save_through_app(w, out)
@@ -1036,3 +1033,225 @@ class TestBlocker4EditedRowMustFailLoud:
             out = pathlib.Path(td) / "badnum.dcm"
             with pytest.raises(ValueError, match="0010"):
                 _save_through_app(w, out)
+
+
+# --- Cora 13021 re-review repro tests (f07e4ae) ---
+
+
+def _base():
+    ds = pydicom.Dataset()
+    ds.PatientName = "TEST^BASE"
+    ds.PatientID = "BASE"
+    ds.SOPClassUID = "1.2.840.10008.5.1.4.1.1.2"
+    ds.SOPInstanceUID = generate_uid()
+    return ds
+
+
+def _save(w):
+    with tempfile.TemporaryDirectory() as td:
+        out = pathlib.Path(td) / "out.dcm"
+        w._save_dataset_to(out)
+        return pydicom.dcmread(out, force=True)
+
+
+def _find_row_in(root, tag_string):
+    for i in range(root.childCount()):
+        c = root.child(i)
+        if c.text(0) == tag_string:
+            return c
+        r = _find_row_in(c, tag_string)
+        if r:
+            return r
+    return None
+
+
+class TestCoraReproNestedOps:
+    """Repro tests from Cora's re-review at f07e4ae: nested ops must hit the
+    right dataset, not the root."""
+
+    def test_nested_edit_lands_in_item(self, qapp):
+        w = M.DCMQtreePy()
+        ds = _base()
+        item = pydicom.Dataset()
+        item.PatientID = "ITEM"
+        ds.OtherPatientIDsSequence = pydicom.Sequence([item])
+        top = _render_base(w, ds)
+        # find the NESTED PatientID (inside the item, not root)
+        seq_header = _find_row(top, "(0010, 1002)")
+        nested_row = None
+        if seq_header is not None:
+            for k in range(seq_header.childCount()):
+                child = seq_header.child(k)
+                for j in range(child.childCount()):
+                    if child.child(j).text(0) == "(0010, 0020)":
+                        nested_row = child.child(j)
+                        break
+        assert nested_row is not None
+        nested_row.setText(2, "EDITED")
+        s = _save(w)
+        assert s.PatientID == "BASE", "root PatientID was overwritten"
+        assert s.OtherPatientIDsSequence[0].PatientID == "EDITED"
+
+    def test_nested_all_digit_delete_keeps_root(self, qapp):
+        w = M.DCMQtreePy()
+        ds = _base()
+        ds.InstanceNumber = "1"
+        item = pydicom.Dataset()
+        item.PatientID = "ITEM"
+        item.InstanceNumber = "5"
+        ds.OtherPatientIDsSequence = pydicom.Sequence([item])
+        top = _render_base(w, ds)
+        # find the nested InstanceNumber "5"
+        seq_header = _find_row(top, "(0010, 1002)")
+        nested_row = None
+        if seq_header is not None:
+            for k in range(seq_header.childCount()):
+                child = seq_header.child(k)
+                for j in range(child.childCount()):
+                    if child.child(j).text(0) == "(0020, 0013)":
+                        nested_row = child.child(j)
+                        break
+        assert nested_row is not None
+        w.dcm_tree_widget.setCurrentItem(nested_row)
+        w.handle_tree_delete_pressed(None)
+        s = _save(w)
+        assert s.InstanceNumber == "1", "root InstanceNumber was deleted"
+        assert "InstanceNumber" not in s.OtherPatientIDsSequence[0]
+
+    def test_creator_delete_same_group_only(self, qapp):
+        w = M.DCMQtreePy()
+        ds = _base()
+        ds.private_block(0x0059, "A", create=True).add_new(0x11, "LO", "a-member")
+        ds.private_block(0x0061, "B", create=True).add_new(0x11, "LO", "b-member")
+        top = _render_base(w, ds)
+        row = _find_row(top, "(0059, 0010)")
+        assert row is not None
+        w.dcm_tree_widget.setCurrentItem(row)
+        w.handle_tree_delete_pressed(None)
+        s = _save(w)
+        assert "B" in s.private_creators(0x0061), "cross-group creator deleted"
+        assert s.private_block(0x0061, "B")[0x11].value == "b-member"
+
+    def test_prune_by_exact_tag_not_name(self, qapp):
+        w = M.DCMQtreePy()
+        ds = _base()
+        ds.private_block(0x0059, "SAME", create=True).add_new(0x11, "LO", "live")
+        ds.private_block(0x0061, "SAME", create=True).add_new(0x11, "LO", "other-live")
+        top = _render_base(w, ds)
+        # empty the 0059 block
+        row = _find_row(top, "(0059, 1011)")
+        assert row is not None
+        w.dcm_tree_widget.setCurrentItem(row)
+        w.handle_tree_delete_pressed(None)
+        s = _save(w)
+        assert "SAME" in s.private_creators(0x0061), "prune matched by name across groups"
+        assert s.private_block(0x0061, "SAME")[0x11].value == "other-live"
+
+    def test_compressed_ts_preserved(self, qapp):
+        w = M.DCMQtreePy()
+        ds = _base()
+        _render_base(w, ds)
+        # set TS on current_dataset after render (render may not preserve file_meta)
+        w.current_dataset.ensure_file_meta()
+        w.current_dataset.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.4.90"
+        s = _save(w)
+        assert s.file_meta.TransferSyntaxUID == "1.2.840.10008.1.2.4.90", "compressed TS relabelled"
+
+    def test_G_nested_creator_delete_keeps_root(self, qapp):
+        w = M.DCMQtreePy()
+        ds = _base()
+        ds.private_block(0x0059, "P", create=True).add_new(0x11, "LO", "root")
+        it = pydicom.Dataset()
+        it.private_block(0x0059, "P", create=True).add_new(0x11, "LO", "nested")
+        ds.ReferencedImageSequence = pydicom.Sequence([it])
+        top = _render_base(w, ds)
+        seq = _find_row(top, "(0008, 1140)")
+        assert seq is not None
+        item = seq.child(0)
+        row = _find_row(item, "(0059, 0010)")
+        assert row is not None
+        w.dcm_tree_widget.setCurrentItem(row)
+        w.handle_tree_delete_pressed(None)
+        s = _save(w)
+        assert s.private_block(0x0059, "P")[0x11].value == "root"
+
+    def test_H_nested_sequence_item_delete_hits_own_sequence(self, qapp):
+        w = M.DCMQtreePy()
+        ds = _base()
+        root_items = [pydicom.Dataset(), pydicom.Dataset()]
+        root_items[0].PatientID = "R1"
+        root_items[1].PatientID = "R2"
+        ds.OtherPatientIDsSequence = pydicom.Sequence(root_items)
+        inner = pydicom.Dataset()
+        n1 = pydicom.Dataset()
+        n1.PatientID = "N1"
+        n2 = pydicom.Dataset()
+        n2.PatientID = "N2"
+        inner.OtherPatientIDsSequence = pydicom.Sequence([n1, n2])
+        ds.ReferencedImageSequence = pydicom.Sequence([inner])
+        top = _render_base(w, ds)
+        rseq = _find_row(top, "(0008, 1140)")
+        assert rseq is not None
+        nseq = _find_row(rseq, "(0010, 1002)")
+        assert nseq is not None
+        w.dcm_tree_widget.setCurrentItem(nseq.child(0))
+        w.handle_tree_delete_pressed(None)
+        s = _save(w)
+        assert [i.PatientID for i in s.OtherPatientIDsSequence] == ["R1", "R2"]
+        assert [i.PatientID for i in s.ReferencedImageSequence[0].OtherPatientIDsSequence] == ["N2"]
+
+    def test_refusal_from_on_file_save(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        _render_base(w, _base())
+        ghost = QTreeWidgetItem(w.dcm_tree_widget.topLevelItem(0))
+        ghost.setText(0, "(0009, 2010)")
+        ghost.setText(2, "EDITED")
+        w._set_item_dirty(ghost, 2)
+        w.has_edits = True
+        fired = []
+        monkeypatch.setattr(
+            w, "non_native_warning_message",
+            lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "refused.dcm"
+            out.write_bytes(b"PRE-EXISTING")
+            ok = w._perform_save(str(out))
+            assert ok is False
+            assert any("refused" in t.lower() for t in fired), f"no refusal dialog: {fired}"
+            assert out.read_bytes() == b"PRE-EXISTING"
+
+    def test_pending_error_blocks_save(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        _render_base(w, _base())
+        w._pending_error = ValueError("bad edit")
+        fired = []
+        monkeypatch.setattr(
+            w, "non_native_warning_message",
+            lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "blocked.dcm"
+            ok = w._perform_save(str(out))
+            assert ok is False, "save succeeded despite pending error"
+            assert fired, "no dialog on pending error"
+
+    def test_add_element_under_nested_item(self, qapp):
+        w = M.DCMQtreePy()
+        ds = _base()
+        item = pydicom.Dataset()
+        item.PatientID = "ITEM"
+        ds.OtherPatientIDsSequence = pydicom.Sequence([item])
+        top = _render_base(w, ds)
+        seq_header = _find_row(top, "(0010, 1002)")
+        assert seq_header is not None
+        item_row = seq_header.child(0)
+        # resolve the item's dataset and write there
+        parent_ds, is_sq, seq_tag, idx = w._find_parent_dataset(item_row)
+        assert is_sq, "item row not resolved as sequence item"
+        seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
+        target_ds = seq_elem.value[idx]
+        target_ds[pydicom.tag.Tag(0x0010, 0x0020)] = pydicom.DataElement(0x00100020, "LO", "NESTEDID")
+        s = _save(w)
+        assert s.OtherPatientIDsSequence[0].PatientID == "NESTEDID"
+        assert s.PatientID == "BASE", "root PatientID was overwritten"

@@ -99,7 +99,6 @@ class DCMQtreePy(QMainWindow):
         self.current_list_item = None
         self.reverting_list_item = False
         self.current_dataset = Dataset()
-        self._delete_journal = []
         self._pruned_creators: list[tuple] = []  # (creator_tag, dataset_ref) for exact prune
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
@@ -637,7 +636,15 @@ class DCMQtreePy(QMainWindow):
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
-                target_ds, _, _, _ = self._find_parent_dataset(selected_items[0])
+                parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_items[0])
+                if is_sq and seq_tag is not None:
+                    seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
+                    if seq_elem is not None and seq_elem.VR == "SQ" and 0 <= item_idx < len(seq_elem.value):
+                        target_ds = seq_elem.value[item_idx]
+                    else:
+                        target_ds = parent_ds
+                else:
+                    target_ds = parent_ds
         target_ds[public_element.tag] = public_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -685,7 +692,15 @@ class DCMQtreePy(QMainWindow):
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
-                target_ds, _, _, _ = self._find_parent_dataset(selected_items[0])
+                parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_items[0])
+                if is_sq and seq_tag is not None:
+                    seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
+                    if seq_elem is not None and seq_elem.VR == "SQ" and 0 <= item_idx < len(seq_elem.value):
+                        target_ds = seq_elem.value[item_idx]
+                    else:
+                        target_ds = parent_ds
+                else:
+                    target_ds = parent_ds
         target_ds[private_element.tag] = private_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -762,6 +777,10 @@ class DCMQtreePy(QMainWindow):
                 pass
             else:
                 elem.value = new_value
+            # Clear per-tag error on success (cora: correcting a bad edit unblocks save)
+            if hasattr(self, "_pending_error") and self._pending_error is not None:
+                if tag_as_string in str(self._pending_error):
+                    self._pending_error = None
         except (KeyError, ValueError) as e:
             self._pending_error = ValueError(f"{tag_as_string}: {e}")
             pass
@@ -780,10 +799,13 @@ class DCMQtreePy(QMainWindow):
         parent_tag = self._convert_tag_as_string_to_tuple(parent_tag_str)
         # If the item itself is a sequence item (tag matches parent + numeric value)
         if item.text(2).isdigit() and item.text(0) == parent.text(0):
-            seq_elem = self.current_dataset.get(pydicom.tag.Tag(parent_tag))
+            seq_tag = parent_tag
+            # Resolve the dataset that owns this sequence (cora: nested seq-item)
+            owner_ds = self._find_sequence_owner(parent)
+            seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
             if seq_elem is not None and seq_elem.VR == "SQ":
                 item_idx = int(item.text(2)) - 1
-                return self.current_dataset, True, parent_tag, item_idx
+                return owner_ds, True, seq_tag, item_idx
             return self.current_dataset, False, None, None
         # Climb through nested sequence items recursively
         current = item
@@ -851,6 +873,8 @@ class DCMQtreePy(QMainWindow):
                 if tag[0] % 2 == 1:
                     private_block_byte = tag[1] % 256
                     if tag[1] >= 0x0010 and tag[1] <= 0x00FF:
+                        # Resolve the row's own dataset (cora: nested creator delete)
+                        parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
                         next_child = parent.child(child_index + 1)
                         if next_child is not None:
                             tag_as_string2 = next_child.text(0)
@@ -862,7 +886,7 @@ class DCMQtreePy(QMainWindow):
                                     member_tag = self._convert_tag_as_string_to_tuple(member.text(0))
                                     if member_tag[0] == tag[0] and member_tag[1] >> 8 == private_block_byte:
                                         try:
-                                            del self.current_dataset[pydicom.tag.Tag(member_tag)]
+                                            del parent_ds[pydicom.tag.Tag(member_tag)]
                                             parent.takeChild(j)
                                         except KeyError:
                                             self.non_native_warning_message(
@@ -873,7 +897,7 @@ class DCMQtreePy(QMainWindow):
                                             return
                                 # Delete the creator element itself
                                 try:
-                                    del self.current_dataset[pydicom.tag.Tag(tag)]
+                                    del parent_ds[pydicom.tag.Tag(tag)]
                                 except KeyError:
                                     self.non_native_warning_message(
                                         "Delete failed",
@@ -887,12 +911,11 @@ class DCMQtreePy(QMainWindow):
                 # Sequence items share their parent tag and have numeric text(2)
                 is_seq_item = selected_item.text(2).isdigit() and selected_item.text(0) == parent.text(0)
                 if is_seq_item:
-                    # Deleting a sequence item
+                    # Deleting a sequence item — resolve owner dataset (cora: nested seq-item)
                     parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_item)
                     if is_sq and seq_tag is not None:
-                        seq_elem = self.current_dataset.get(pydicom.tag.Tag(seq_tag))
+                        seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
                         if seq_elem is not None and seq_elem.VR == "SQ":
-                            self._delete_journal.append(("seq_item", seq_tag, item_idx))
                             del seq_elem.value[item_idx]
                 else:
                     # Deleting a regular element
@@ -909,11 +932,6 @@ class DCMQtreePy(QMainWindow):
                             )
                             return
                     try:
-                        elem = parent_ds.get(pydicom.tag.Tag(tag))
-                        kind = "seq" if elem is not None and elem.VR == "SQ" else "element"
-                        self._delete_journal.append((kind, tag, parent_ds is self.current_dataset))
-                        if kind == "seq" and elem is not None and len(elem.value) > 0:
-                            self._delete_journal.append(("subtree", tag, parent_ds is self.current_dataset))
                         del parent_ds[pydicom.tag.Tag(tag)]
                         # Cyril 2026-11-01: keep empty items — do NOT prune here
                         # Track emptied private blocks for creator prune (cora 13021 #4)
