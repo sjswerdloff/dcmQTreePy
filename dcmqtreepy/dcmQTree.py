@@ -59,6 +59,13 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
+def _get_umask() -> int:
+    """Get the current umask (only safe way is to set it and restore)."""
+    old = os.umask(0)
+    os.umask(old)
+    return old
+
+
 class DCMQtreePy(QMainWindow):
     def __init__(self, parent=None):
         # Force non-native menubar, otherwise getting help while on the menu doesn't work
@@ -617,13 +624,22 @@ class DCMQtreePy(QMainWindow):
                 dcmwrite(f, modified_ds, write_like_original=False)
                 f.flush()
                 os.fsync(f.fileno())
+            # Preserve target's permissions (mkstemp creates 0600)
+            if path.exists():
+                os.chmod(str(tmp_path), path.stat().st_mode & 0o7777)
+            else:
+                os.chmod(str(tmp_path), 0o666 & ~_get_umask())
             os.replace(str(tmp_path), str(path))
-            # fsync the directory to persist the rename
-            dir_fd = os.open(str(path.parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
+            # fsync the directory — POSIX only (Windows raises after replace)
+            if os.name == "posix":
+                try:
+                    dir_fd = os.open(str(path.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except OSError:
+                    pass  # the replace already succeeded
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise

@@ -1467,10 +1467,11 @@ class TestAtomicWrite:
             w._save_dataset_to(target)
             original_bytes = target.read_bytes()
             assert len(original_bytes) > 0
-            # make the encoder raise partway
+            # make the encoder write some bytes then raise (cora: "partway")
             import pydicom.filewriter as fw
 
-            def broken_dcmwrite(*args, **kw):
+            def broken_dcmwrite(fp, *args, **kw):
+                fp.write(b"PARTIAL DATA")
                 raise OSError("disk full")
 
             monkeypatch.setattr(fw, "dcmwrite", broken_dcmwrite)
@@ -1485,3 +1486,15 @@ class TestAtomicWrite:
             # no temp files left behind
             leftovers = [f for f in pathlib.Path(td).iterdir() if f.suffix == ".tmp"]
             assert not leftovers, f"temp files left behind: {leftovers}"
+
+    def test_mode_preserved_on_replace(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        _render_base(w, _base())
+        with tempfile.TemporaryDirectory() as td:
+            target = pathlib.Path(td) / "original.dcm"
+            w._save_dataset_to(target)
+            os.chmod(str(target), 0o644)
+            w._save_dataset_to(target)
+            mode = target.stat().st_mode & 0o7777
+            assert mode == 0o644, f"permissions changed: {oct(mode)}"
