@@ -28,7 +28,14 @@ on:
         default: "1"
 
 permissions:
-  contents: write # tag + release creation only
+  # #46 finding-1 review (cyril): workflow-level contents:write propagated a WRITE-scoped
+  # GITHUB_TOKEN to EVERY job, and actions/checkout persists that token in .git/config by
+  # default — so the jobs that RUN untrusted build output (build-macos, verify-macos,
+  # build-windows) held a credential able to push tags / create releases. Least privilege:
+  # default the whole workflow to read, grant write ONLY to publish-release, and turn off
+  # persisted credentials on every checkout (nothing here git-pushes — all writes are via gh
+  # with an explicit GH_TOKEN in env:, never via a git-stored credential).
+  contents: read
 
 env:
   PYTHON_VERSION: "3.12" # the floor (README Requirements, #30): the release builds on the minimum supported interpreter
@@ -44,6 +51,8 @@ jobs:
       tag: ${{ steps.tagfrompyproject.outputs.tag }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       - name: dispatch is from main
         env:
           REF: ${{ github.ref }}
@@ -106,6 +115,8 @@ jobs:
     environment: release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           version: "0.9.9"
@@ -184,6 +195,8 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           version: "0.9.9"
@@ -253,14 +266,30 @@ jobs:
           fi
           printf 'bundle .dcm inventory (library data only): %s\n' "${DCMS:-none}"
           echo "ad-hoc bundle smoke passed and bundle verified free of test data"
+      - name: Archive the ad-hoc bundle with ditto (preserve exec bits + framework symlinks)
+        run: |
+          # #46 finding-1 review (cyril + cora, both): upload-artifact with a bare directory does
+          # NOT preserve file modes or symlinks — it stores symlinks as copies of their targets and
+          # drops the executable bit. A PyInstaller onedir .app needs BOTH (the Contents/MacOS/
+          # dcmQTreePy exec bit and the Qt *.framework/Versions/Current symlinks), or the notarize
+          # job signs a reshaped, unsealable bundle. Fix: ditto -c -k --keepParent makes an archive
+          # that preserves modes, symlinks, and the bundle's top directory; notarize restores with
+          # ditto -x -k. Proven THIS host: ditto round-trip keeps exe bit -rwxr-xr-x@ and all 130
+          # symlinks, and the restored bundle self-tests rc 0.
+          set -euo pipefail
+          test -d dist/dcmQTreePy.app || { echo "::error::built bundle missing before archive"; exit 1; }
+          ditto -c -k --keepParent dist/dcmQTreePy.app dist/dcmQTreePy-adhoc.zip
+          test -s dist/dcmQTreePy-adhoc.zip || { echo "::error::ditto produced empty zip"; exit 1; }
+          # SHA-256 of the EXACT bytes uploaded; notarize re-checks after download so the bundle it
+          # signs is provably the bundle that was self-tested here (integrity across the job hop).
+          (cd dist && shasum -a 256 dcmQTreePy-adhoc.zip > dcmQTreePy-adhoc.zip.sha256 && cat dcmQTreePy-adhoc.zip.sha256)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos-arm64-adhoc-app
-          path: dist/dcmQTreePy.app
+          path: |
+            dist/dcmQTreePy-adhoc.zip
+            dist/dcmQTreePy-adhoc.zip.sha256
           if-no-files-found: error
-          # .app is a bundle (symlinks, executable bits, deep structure) — round-trip it with
-          # the archive format artifact v4 uses and restore with tar, NOT cp, so the layout the
-          # notarize job signs is byte-for-byte the layout the build job self-tested.
 
   notarize-macos-arm64:
     # JOBS 2 of the split. THIS is the only job that holds APPLE_SIGNING_P12*/APPLE_API_* and the
@@ -278,16 +307,28 @@ jobs:
         with:
           name: macos-arm64-adhoc-app
           path: dist
-      - name: Confirm the ad-hoc bundle arrived and is PyInstaller's output (not executed)
+      - name: Verify the ad-hoc zip's SHA-256, then restore with ditto (preserve bits + symlinks)
         run: |
-          # Fail closed if the artifact didn't land. Inspect with codesign -dv (read-only, does
-          # NOT launch) — this is file inspection, not execution. ad-hoc until we re-sign below.
+          # #46 finding-1 review (cyril + cora): the bundle crosses jobs as a ditto zip, NOT a bare
+          # directory, so its exec bit and 130 framework symlinks survive. Check the zip's SHA-256
+          # against the checksum the build job stamped — the bytes signed here are provably the bytes
+          # self-tested upstream. Then ditto -x -k restores the bundle intact. None of this launches
+          # the app; it is hash-check + archive-extract + read-only inspection.
           set -euo pipefail
+          ZIP="dist/dcmQTreePy-adhoc.zip"
+          SHA="dist/dcmQTreePy-adhoc.zip.sha256"
+          [ -s "$ZIP" ] || { echo "::error::ad-hoc zip artifact missing"; exit 1; }
+          [ -s "$SHA" ] || { echo "::error::ad-hoc zip checksum missing"; exit 1; }
+          (cd dist && shasum -a 256 -c dcmQTreePy-adhoc.zip.sha256) || { echo "::error::ad-hoc zip SHA mismatch"; exit 1; }
+          ditto -x -k "$ZIP" dist/
           APP="dist/dcmQTreePy.app"
-          [ -d "$APP" ] || { echo "::error::ad-hoc .app artifact missing in $APP"; exit 1; }
-          [ -x "$APP/Contents/MacOS/dcmQTreePy" ] || { echo "::error::main executable missing (not run here, only checked present)"; exit 1; }
+          [ -d "$APP" ] || { echo "::error::no .app after ditto extract"; exit 1; }
+          # Integrity assertions (all read-only, none execute): exec bit preserved, symlinks intact.
+          [ -x "$APP/Contents/MacOS/dcmQTreePy" ] || { echo "::error::main executable lost its exec bit in transit"; exit 1; }
+          LINKS="$(find "$APP" -type l | wc -l | tr -d ' ')"
+          [ "$LINKS" -gt 0 ] || { echo "::error::no symlinks in restored bundle (ditto -k failed to preserve)"; exit 1; }
           codesign -dv "$APP" 2>&1 | sed 's/^/codesign -dv: /'
-          echo "ad-hoc bundle present, about to apply Developer ID (this job will not run it)"
+          echo "ad-hoc bundle restored via ditto (exe bit + $LINKS symlinks intact), about to apply Developer ID (this job will not run it)"
       - name: Decode certificate into an ephemeral keychain (fails closed)
         env:
           P12_B64: ${{ secrets.APPLE_SIGNING_P12_BASE64 }}
@@ -441,6 +482,8 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           version: "0.9.9"
@@ -506,8 +549,12 @@ jobs:
     needs: [verify-inputs, build-windows, verify-macos-arm64]
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      contents: write # the ONLY job that writes: gh release create. Scoped here, not workflow-wide.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       # #46 finding-1 split: publish must pull ONLY the two shippable artifacts by name, NOT
       # pattern "*". The split introduced a third artifact — macos-arm64-adhoc-app (the pre-
       # Developer-ID bundle job 1 self-tests and job 2 consumes) — which is an intermediate, never
