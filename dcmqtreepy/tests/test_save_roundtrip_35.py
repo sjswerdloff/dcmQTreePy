@@ -1230,7 +1230,7 @@ class TestCoraReproNestedOps:
         row = _find_row(top, "(0020, 0013)")
         assert row is not None
         row.setText(2, "not-a-number")
-        assert w._pending_error is not None, "bad edit did not set _pending_error"
+        assert w._pending_errors, "bad edit did not set _pending_errors"
         fired = []
         monkeypatch.setattr(
             w, "non_native_warning_message",
@@ -1245,12 +1245,38 @@ class TestCoraReproNestedOps:
 
         # Correct the value — save should succeed
         row.setText(2, "1")
-        assert w._pending_error is None, "corrected edit did not clear _pending_error"
+        assert not w._pending_errors, "corrected edit did not clear _pending_errors"
         with tempfile.TemporaryDirectory() as td:
             out = pathlib.Path(td) / "fixed.dcm"
             w.current_list_item = QListWidgetItem(str(out))
             w.on_file_save()
             assert out.exists(), "save failed after correcting the value"
+
+    def test_two_bad_edits_one_corrected_save_refused(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        ds = _base()
+        ds.SliceLocation = "1.0"
+        top = _render_base(w, ds)
+        row1 = _find_row(top, "(0020, 0013)")  # InstanceNumber (IS)
+        row2 = _find_row(top, "(0020, 1041)")  # SliceLocation (DS)
+        assert row1 is not None and row2 is not None
+        row1.setText(2, "bad-first")
+        row2.setText(2, "bad-second")
+        assert len(w._pending_errors) == 2, f"expected 2 errors, got {w._pending_errors}"
+        # correct only the second
+        row2.setText(2, "1.0")
+        assert len(w._pending_errors) == 1, f"expected 1 error after correction, got {w._pending_errors}"
+        fired = []
+        monkeypatch.setattr(
+            w, "non_native_warning_message",
+            lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "stillblocked.dcm"
+            from PySide6.QtWidgets import QListWidgetItem
+            w.current_list_item = QListWidgetItem(str(out))
+            w.on_file_save()
+            assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
 
     def test_add_element_under_nested_item(self, qapp, monkeypatch):
         w = M.DCMQtreePy()

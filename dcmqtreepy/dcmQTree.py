@@ -100,6 +100,7 @@ class DCMQtreePy(QMainWindow):
         self.reverting_list_item = False
         self.current_dataset = Dataset()
         self._pruned_creators: list[tuple] = []  # (creator_tag, dataset_ref) for exact prune
+        self._pending_errors: dict[str, Exception] = {}  # per-tag errors (connor: no single slot)
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         logging.info("Loading Known Private Dictionaries")
@@ -510,7 +511,7 @@ class DCMQtreePy(QMainWindow):
             ds = dcmread(path, force=True)
             # ds.remove_private_tags() # temporarily, until save as is working.
             self.current_dataset = ds
-            self._pending_error = None  # clear per-file (cora 13021 #8)
+            self._pending_errors.clear()  # clear per-file (cora 13021 #8)
             self.dcm_tree_widget.blockSignals(True)
             self.dcm_tree_widget.clear()
             tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
@@ -582,8 +583,8 @@ class DCMQtreePy(QMainWindow):
         return ghosts
 
     def _save_dataset_to(self, path: Path) -> None:
-        if hasattr(self, "_pending_error") and self._pending_error is not None:
-            raise self._pending_error
+        if self._pending_errors:
+            raise ValueError(f"Uncorrected edits: {', '.join(self._pending_errors.keys())}")
         # Prune creators emptied this session (cora 13021 #4) — exact tags, re-check at save
         if self._pruned_creators:
             for creator_tag, ds_ref in self._pruned_creators:
@@ -631,20 +632,12 @@ class DCMQtreePy(QMainWindow):
                 element_value = value_list
 
         public_element.value = element_value
-        # Resolve target dataset from tree position (cora 13021 #6)
+        # Resolve target dataset (connor: single function)
         target_ds = self.current_dataset
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
-                parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_items[0])
-                if is_sq and seq_tag is not None:
-                    seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
-                    if seq_elem is not None and seq_elem.VR == "SQ" and 0 <= item_idx < len(seq_elem.value):
-                        target_ds = seq_elem.value[item_idx]
-                    else:
-                        target_ds = parent_ds
-                else:
-                    target_ds = parent_ds
+                target_ds = self._resolve_add_target(selected_items[0])
         target_ds[public_element.tag] = public_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -687,20 +680,12 @@ class DCMQtreePy(QMainWindow):
             else:
                 element_value = value_list
         private_element.value = element_value
-        # Resolve target dataset from tree position (cora 13021 #6)
+        # Resolve target dataset (connor: single function)
         target_ds = self.current_dataset
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
-                parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_items[0])
-                if is_sq and seq_tag is not None:
-                    seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
-                    if seq_elem is not None and seq_elem.VR == "SQ" and 0 <= item_idx < len(seq_elem.value):
-                        target_ds = seq_elem.value[item_idx]
-                    else:
-                        target_ds = parent_ds
-                else:
-                    target_ds = parent_ds
+                target_ds = self._resolve_add_target(selected_items[0])
         target_ds[private_element.tag] = private_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -778,13 +763,34 @@ class DCMQtreePy(QMainWindow):
             else:
                 elem.value = new_value
             # Clear per-tag error on success (cora: correcting a bad edit unblocks save)
-            if hasattr(self, "_pending_error") and self._pending_error is not None:
-                if tag_as_string in str(self._pending_error):
-                    self._pending_error = None
+            self._pending_errors.pop(tag_as_string, None)
         except (KeyError, ValueError) as e:
-            self._pending_error = ValueError(f"{tag_as_string}: {e}")
+            self._pending_errors[tag_as_string] = ValueError(f"{tag_as_string}: {e}")
             pass
         self.has_edits = True
+
+    def _resolve_add_target(self, item: QTreeWidgetItem):
+        """Return the dataset where new children of this row belong.
+        Item row → that item's dataset. Element row → the row's dataset.
+        (connor: single function, matching the tree's own rule)
+        """
+        parent = item.parent()
+        if parent is None:
+            return self.current_dataset
+        parent_tag_str = parent.text(0)
+        if "(" not in parent_tag_str:
+            return self.current_dataset
+        # Item row: tag matches parent + numeric value
+        if item.text(2).isdigit() and item.text(0) == parent.text(0):
+            parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(item)
+            if is_sq and seq_tag is not None:
+                seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ" and 0 <= item_idx < len(seq_elem.value):
+                    return seq_elem.value[item_idx]
+            return self.current_dataset
+        # Element row: the dataset that holds this element
+        parent_ds, _, _, _ = self._find_parent_dataset(item)
+        return parent_ds
 
     def _find_parent_dataset(self, item: QTreeWidgetItem):
         """Walk up the tree to find the Dataset that holds this element.
