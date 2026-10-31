@@ -32,6 +32,12 @@ jobs:
         python-version: ${{ matrix.python-version }}
         enable-cache: true
 
+    - name: Install system libraries
+      # PySide6 needs libEGL.so.1, which the Ubuntu 26.04 image no longer ships (#45).
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libegl1
+
     - name: Install dependencies
       run: |
         uv sync --locked --dev
