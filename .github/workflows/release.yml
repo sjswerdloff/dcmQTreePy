@@ -589,6 +589,7 @@ jobs:
           [ -s release-assets/dcmQTreePy.exe ] || { echo "::error::Windows exe asset missing"; exit 1; }
           (cd release-assets && shasum -a 256 -c dcmQTreePy-arm64.dmg.sha256 && sha256sum -c dcmQTreePy.exe.sha256)
       - name: Create GitHub Release with assets
+        id: create
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.verify-inputs.outputs.tag }}
@@ -607,7 +608,7 @@ jobs:
             release-assets/*
           gh release view "$TAG" --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
       - name: Cleanup partial release on failure (delete release + tag, leave run red)
-        if: failure()
+        if: failure() && steps.create.conclusion == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.verify-inputs.outputs.tag }}
@@ -621,20 +622,23 @@ jobs:
           # there is nothing to clean and we note that — never deleting a tag we did not create.
           # No swallowed errors (the #34-blocker-1 shape cyril reviewed). Run stays red BY DESIGN.
           set -u
-          # First: is there actually a release on TAG to clean? (authenticated read)
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "no release present on $TAG at cleanup — nothing to delete (create failed before making one)"
-            # If the RELEASE never appeared, could a bare TAG still exist? Check the ref, authenticated.
-            TRC=0
-            gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" --silent >/dev/null 2>&1 || TRC=$?
-            if [ "$TRC" -eq 0 ]; then
-              echo "::error::a bare tag $TAG exists but no release — delete the orphan tag manually"
-            fi
-            # Re-surface the original failure; run stays red.
-            echo "::error::publish failed after attempting gh release create — nothing to clean, run intentionally red"
-            exit 1
+          # Distinguish "not found" (nothing made - delete nothing) from "could not ask" (auth/network
+          # - do NOT claim clean). cora's 2nd point: `gh release view >/dev/null 2>&1` collapses both
+          # into "absent", so an auth error would wrongly report a clean nothing-to-do. Capture output.
+          VOUT="$(gh release view "$TAG" 2>&1)"; VRC=$?
+          if [ "$VRC" -ne 0 ]; then
+            case "$VOUT" in
+              *"not found"*|*"Not Found"*|*"404"*)
+                echo "no release present on $TAG (confirmed not-found) - create failed before making one"
+                echo "::error::publish failed after gh release create - no release present to clean; run intentionally red"
+                exit 1 ;;
+              *)
+                echo "::error::could not confirm release state of $TAG (authenticated view failed rc $VRC): $VOUT"
+                echo "::error::UNVERIFIED - do NOT assume absent; a human must check for a partial release $TAG"
+                exit 1 ;;
+            esac
           fi
-          echo "found release on $TAG created by this run — cleaning up partial release + tag"
+          echo "found release on $TAG created by this run (create step failed) - deleting it and its tag"
           RC=0
           gh release delete "$TAG" --yes --cleanup-tag || RC=$?
           echo "gh release delete exited $RC"
@@ -643,8 +647,14 @@ jobs:
           # private and checkout ran persist-credentials:false, so an unauthenticated ls-remote returning
           # empty would falsely read as 'gone'. gh release view fails on a deleted release; the git-refs
           # endpoint returns 404 on a deleted tag. Both are authenticated, so an absence is real.
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          RVOUT="$(gh release view "$TAG" 2>&1)"; RVRC=$?
+          if [ "$RVRC" -eq 0 ]; then
             echo "::error::release $TAG still exists after cleanup delete"; CLEAN_OK=0
+          else
+            case "$RVOUT" in
+              *"not found"*|*"Not Found"*|*"404"*) echo "release $TAG verified gone (authenticated not-found)" ;;
+              *) echo "::error::release absence UNVERIFIED after delete (view rc $RVRC, not a clean not-found): $RVOUT"; CLEAN_OK=0 ;;
+            esac
           fi
           OUT="$(gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" 2>&1 || true)"
           case "$OUT" in
