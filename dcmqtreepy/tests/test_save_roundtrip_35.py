@@ -1560,13 +1560,16 @@ class TestTransferSyntaxRule:
     def test_compressed_source_keeps_syntax(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
         monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
-        ds = _base()
-        _render_base(w, ds)
-        # set TS after render (render may reset file_meta)
-        w.current_dataset.ensure_file_meta()
-        w.current_dataset.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.4.90"
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("JPEG2000.dcm")
+        assert src is not None, "JPEG2000.dcm test file not found"
         with tempfile.TemporaryDirectory() as td:
+            w.populate_tree_widget_from_file(str(src))
             out = pathlib.Path(td) / "compressed.dcm"
             w._save_dataset_to(out)
             saved = pydicom.dcmread(out, force=True)
-            assert saved.file_meta.TransferSyntaxUID == "1.2.840.10008.1.2.4.90", "compressed syntax changed"
+            assert saved.file_meta.TransferSyntaxUID == "1.2.840.10008.1.2.4.91", (
+                f"compressed syntax changed: {saved.file_meta.TransferSyntaxUID}"
+            )
+            assert hasattr(saved, "PixelData"), "pixel data lost"
