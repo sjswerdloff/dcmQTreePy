@@ -3,6 +3,7 @@ import atexit
 import logging
 import os
 import sys
+import tempfile
 from copy import deepcopy
 from decimal import Decimal
 from pathlib import Path
@@ -608,7 +609,25 @@ class DCMQtreePy(QMainWindow):
         if not modified_ds.file_meta.TransferSyntaxUID:
             modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
         modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
-        dcmwrite(path, modified_ds, write_like_original=False)
+        # Atomic write: temp in same directory, fsync, os.replace (issue #43)
+        tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                dcmwrite(f, modified_ds, write_like_original=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(str(tmp_path), str(path))
+            # fsync the directory to persist the rename
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
         add_element_dialog.setProperty("help_id", "add_public_element_dialog")

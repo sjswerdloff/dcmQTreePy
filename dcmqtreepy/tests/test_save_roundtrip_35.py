@@ -1211,7 +1211,8 @@ class TestCoraReproNestedOps:
         w.has_edits = True
         fired = []
         monkeypatch.setattr(
-            w, "non_native_warning_message",
+            w,
+            "non_native_warning_message",
             lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
         )
         with tempfile.TemporaryDirectory() as td:
@@ -1219,6 +1220,7 @@ class TestCoraReproNestedOps:
             out.write_bytes(b"PRE-EXISTING")
             # set current_list_item so on_file_save works
             from PySide6.QtWidgets import QListWidgetItem
+
             w.current_list_item = QListWidgetItem(str(out))
             w.on_file_save()
             assert any("refused" in t.lower() for t in fired), f"no refusal dialog: {fired}"
@@ -1233,12 +1235,14 @@ class TestCoraReproNestedOps:
         assert w._pending_errors, "bad edit did not set _pending_errors"
         fired = []
         monkeypatch.setattr(
-            w, "non_native_warning_message",
+            w,
+            "non_native_warning_message",
             lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
         )
         with tempfile.TemporaryDirectory() as td:
             out = pathlib.Path(td) / "blocked.dcm"
             from PySide6.QtWidgets import QListWidgetItem
+
             w.current_list_item = QListWidgetItem(str(out))
             w.on_file_save()
             assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
@@ -1268,12 +1272,14 @@ class TestCoraReproNestedOps:
         assert len(w._pending_errors) == 1, f"expected 1 error after correction, got {w._pending_errors}"
         fired = []
         monkeypatch.setattr(
-            w, "non_native_warning_message",
+            w,
+            "non_native_warning_message",
             lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
         )
         with tempfile.TemporaryDirectory() as td:
             out = pathlib.Path(td) / "stillblocked.dcm"
             from PySide6.QtWidgets import QListWidgetItem
+
             w.current_list_item = QListWidgetItem(str(out))
             w.on_file_save()
             assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
@@ -1310,12 +1316,14 @@ class TestCoraReproNestedOps:
         assert len(w._pending_errors) == 1, "root edit cleared nested error (keyed by tag, not row)"
         fired = []
         monkeypatch.setattr(
-            w, "non_native_warning_message",
+            w,
+            "non_native_warning_message",
             lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
         )
         with tempfile.TemporaryDirectory() as td:
             out = pathlib.Path(td) / "stillblocked.dcm"
             from PySide6.QtWidgets import QListWidgetItem
+
             w.current_list_item = QListWidgetItem(str(out))
             w.on_file_save()
             assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
@@ -1365,7 +1373,8 @@ class TestCoraReproNestedOps:
         w.dcm_tree_widget.setCurrentItem(seq_header)
         fired = []
         monkeypatch.setattr(
-            w, "non_native_warning_message",
+            w,
+            "non_native_warning_message",
             lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
         )
         mock_elem = pydicom.DataElement(0x00100020, "LO", None)
@@ -1373,9 +1382,15 @@ class TestCoraReproNestedOps:
         class FakeDialog:
             current_public_element = mock_elem
             ui = type("UI", (), {"text_edit_element_value": type("TE", (), {"toPlainText": lambda self: "X"})()})()
-            def __init__(self, *a, **kw): pass
-            def setProperty(self, *a): pass
-            def exec(self): pass
+
+            def __init__(self, *a, **kw):
+                pass
+
+            def setProperty(self, *a):
+                pass
+
+            def exec(self):
+                pass
 
         monkeypatch.setattr(M, "AddPublicElementDialog", FakeDialog)
         w.on_add_element()
@@ -1437,3 +1452,36 @@ class TestCoraReproNestedOps:
         w.dcm_tree_widget.setCurrentItem(creator_row)
         w.handle_tree_delete_pressed(None)
         assert len(w._pending_errors) == 0, "creator delete kept member errors"
+
+
+class TestAtomicWrite:
+    """issue #43: write to temp + os.replace so a failed write leaves the original intact."""
+
+    def test_failed_write_leaves_original_unchanged(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        _render_base(w, _base())
+        with tempfile.TemporaryDirectory() as td:
+            target = pathlib.Path(td) / "original.dcm"
+            # write an initial file
+            w._save_dataset_to(target)
+            original_bytes = target.read_bytes()
+            assert len(original_bytes) > 0
+            # make the encoder raise partway
+            import pydicom.filewriter as fw
+
+            def broken_dcmwrite(*args, **kw):
+                raise OSError("disk full")
+
+            monkeypatch.setattr(fw, "dcmwrite", broken_dcmwrite)
+            monkeypatch.setattr(M, "dcmwrite", broken_dcmwrite)
+            try:
+                w._save_dataset_to(target)
+                raise AssertionError("save should have raised")
+            except OSError:
+                pass
+            # original must be unchanged
+            assert target.read_bytes() == original_bytes, "failed write modified the original"
+            # no temp files left behind
+            leftovers = [f for f in pathlib.Path(td).iterdir() if f.suffix == ".tmp"]
+            assert not leftovers, f"temp files left behind: {leftovers}"
