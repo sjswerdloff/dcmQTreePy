@@ -1421,3 +1421,19 @@ class TestCoraReproNestedOps:
         w.dcm_tree_widget.setCurrentItem(item_row)
         w.handle_tree_delete_pressed(None)
         assert len(w._pending_errors) == 0, "deleted item kept descendant errors"
+
+    def test_creator_delete_drops_member_errors(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        ds = _base()
+        ds.private_block(0x0059, "A", create=True).add_new(0x11, "US", 42)
+        top = _render_base(w, ds)
+        member_row = _find_row(top, "(0059, 1011)")
+        assert member_row is not None
+        member_row.setText(2, "bad-value")
+        assert len(w._pending_errors) == 1
+        creator_row = _find_row(top, "(0059, 0010)")
+        assert creator_row is not None
+        w.dcm_tree_widget.setCurrentItem(creator_row)
+        w.handle_tree_delete_pressed(None)
+        assert len(w._pending_errors) == 0, "creator delete kept member errors"

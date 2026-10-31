@@ -918,6 +918,7 @@ class DCMQtreePy(QMainWindow):
                                     if member_tag[0] == tag[0] and member_tag[1] >> 8 == private_block_byte:
                                         try:
                                             del parent_ds[pydicom.tag.Tag(member_tag)]
+                                            self._drop_pending_errors_for_subtree(member)
                                             parent.takeChild(j)
                                         except KeyError:
                                             self.non_native_warning_message(
