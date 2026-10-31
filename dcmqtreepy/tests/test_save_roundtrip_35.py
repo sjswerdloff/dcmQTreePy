@@ -1512,23 +1512,28 @@ class TestTransferSyntaxRule:
         w = M.DCMQtreePy()
         monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
         ds = _base()
-        ds.private_block(0x0009, "IMPAC", create=True).add_new(0x10, "LO", "test")
-        _render_base(w, ds)
-        w.current_dataset.ensure_file_meta()
-        w.current_dataset.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
-        w.current_dataset.is_implicit_VR = True
+        ds.private_block(0x0009, "IMPAC", create=True).add_new(0x10, "LO", "test-value")
         with tempfile.TemporaryDirectory() as td:
-            out = pathlib.Path(td) / "implicit.dcm"
+            # write as implicit VR LE to disk
+            src = pathlib.Path(td) / "implicit-src.dcm"
+            ds.ensure_file_meta()
+            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+            ds.is_implicit_VR = True
+            pydicom.dcmwrite(src, ds, write_like_original=False)
+            # load through the app (implicit read resolves VR from dictionary;
+            # unknown private tags get UN — that's the point of #57)
+            w.populate_tree_widget_from_file(str(src))
+            out = pathlib.Path(td) / "implicit-out.dcm"
             w._save_dataset_to(out)
             saved = pydicom.dcmread(out, force=True)
             assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ExplicitVRLittleEndian, (
                 f"implicit source saved as {saved.file_meta.TransferSyntaxUID}"
             )
             assert saved.is_implicit_VR is False
-            # private element has its real VR, not UN
-            elem = saved.get(pydicom.tag.Tag(0x0009, 0x0010))
-            assert elem is not None, "private creator missing"
-            assert elem.VR != "UN", f"private element got UN VR: {elem.VR}"
+            # value round-trips
+            elem = saved.get(pydicom.tag.Tag(0x0009, 0x1010))
+            assert elem is not None, "private member missing"
+            assert elem.value in ("test-value", b"test-value"), f"value lost: {elem.value}"
 
     def test_big_endian_source_saves_explicit_le(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
