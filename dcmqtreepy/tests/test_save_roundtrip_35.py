@@ -1452,3 +1452,49 @@ class TestCoraReproNestedOps:
         w.dcm_tree_widget.setCurrentItem(creator_row)
         w.handle_tree_delete_pressed(None)
         assert len(w._pending_errors) == 0, "creator delete kept member errors"
+
+
+class TestAtomicWrite:
+    """issue #43: write to temp + os.replace so a failed write leaves the original intact."""
+
+    def test_failed_write_leaves_original_unchanged(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        _render_base(w, _base())
+        with tempfile.TemporaryDirectory() as td:
+            target = pathlib.Path(td) / "original.dcm"
+            # write an initial file
+            w._save_dataset_to(target)
+            original_bytes = target.read_bytes()
+            assert len(original_bytes) > 0
+            # make the encoder write some bytes then raise (cora: "partway")
+            import pydicom.filewriter as fw
+
+            def broken_dcmwrite(fp, *args, **kw):
+                fp.write(b"PARTIAL DATA")
+                raise OSError("disk full")
+
+            monkeypatch.setattr(fw, "dcmwrite", broken_dcmwrite)
+            monkeypatch.setattr(M, "dcmwrite", broken_dcmwrite)
+            try:
+                w._save_dataset_to(target)
+                raise AssertionError("save should have raised")
+            except OSError:
+                pass
+            # original must be unchanged
+            assert target.read_bytes() == original_bytes, "failed write modified the original"
+            # no temp files left behind
+            leftovers = [f for f in pathlib.Path(td).iterdir() if f.suffix == ".tmp"]
+            assert not leftovers, f"temp files left behind: {leftovers}"
+
+    def test_mode_preserved_on_replace(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        _render_base(w, _base())
+        with tempfile.TemporaryDirectory() as td:
+            target = pathlib.Path(td) / "original.dcm"
+            w._save_dataset_to(target)
+            os.chmod(str(target), 0o640)
+            w._save_dataset_to(target)
+            mode = target.stat().st_mode & 0o7777
+            assert mode == 0o640, f"permissions changed: {oct(mode)}"

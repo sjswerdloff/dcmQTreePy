@@ -3,6 +3,7 @@ import atexit
 import logging
 import os
 import sys
+import tempfile
 from copy import deepcopy
 from decimal import Decimal
 from pathlib import Path
@@ -56,6 +57,13 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
 
     return os.path.join(base_path, relative_path)
+
+
+def _get_umask() -> int:
+    """Get the current umask (only safe way is to set it and restore)."""
+    old = os.umask(0)
+    os.umask(old)
+    return old
 
 
 class DCMQtreePy(QMainWindow):
@@ -608,7 +616,33 @@ class DCMQtreePy(QMainWindow):
         if not modified_ds.file_meta.TransferSyntaxUID:
             modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
         modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
-        dcmwrite(path, modified_ds, write_like_original=False)
+        # Atomic write: temp in same directory, fsync, os.replace (issue #43)
+        tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                dcmwrite(f, modified_ds, write_like_original=False)
+                f.flush()
+                os.fsync(f.fileno())
+            # Preserve target's permissions (mkstemp creates 0600)
+            if path.exists():
+                os.chmod(str(tmp_path), path.stat().st_mode & 0o7777)
+            else:
+                os.chmod(str(tmp_path), 0o666 & ~_get_umask())
+            os.replace(str(tmp_path), str(path))
+            # fsync the directory — POSIX only (Windows raises after replace)
+            if os.name == "posix":
+                try:
+                    dir_fd = os.open(str(path.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except OSError as e:
+                    logging.warning(f"Directory fsync failed (replace already succeeded): {e}")
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
