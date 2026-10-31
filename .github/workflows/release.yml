@@ -656,6 +656,11 @@ jobs:
               *) echo "::error::release absence UNVERIFIED after delete (view rc $RVRC, not a clean not-found): $RVOUT"; CLEAN_OK=0 ;;
             esac
           fi
+          # NOTE (verified this host): `gh api --silent` exits rc=1 for BOTH 404 and other HTTP
+          # errors, so the exit code CANNOT distinguish 'gone' from 'could not ask'. Body-string match
+          # for Not Found/404 is therefore REQUIRED here, not a brittle shortcut - a reviewer or a
+          # future refactor must not replace it with an exit-code check, which would collapse the two
+          # cases cora asked to keep separate (a server error would then falsely read as 'deleted').
           OUT="$(gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" 2>&1 || true)"
           case "$OUT" in
             *"Not Found"*|*"404"*) echo "tag $TAG verified gone (404)" ;;
