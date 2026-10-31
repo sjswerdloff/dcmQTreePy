@@ -1494,7 +1494,7 @@ class TestAtomicWrite:
         with tempfile.TemporaryDirectory() as td:
             target = pathlib.Path(td) / "original.dcm"
             w._save_dataset_to(target)
-            os.chmod(str(target), 0o644)
+            os.chmod(str(target), 0o640)
             w._save_dataset_to(target)
             mode = target.stat().st_mode & 0o7777
-            assert mode == 0o644, f"permissions changed: {oct(mode)}"
+            assert mode == 0o640, f"permissions changed: {oct(mode)}"

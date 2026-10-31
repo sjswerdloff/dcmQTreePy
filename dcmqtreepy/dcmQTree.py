@@ -638,8 +638,8 @@ class DCMQtreePy(QMainWindow):
                         os.fsync(dir_fd)
                     finally:
                         os.close(dir_fd)
-                except OSError:
-                    pass  # the replace already succeeded
+                except OSError as e:
+                    logging.warning(f"Directory fsync failed (replace already succeeded): {e}")
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
