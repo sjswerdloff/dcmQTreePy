@@ -609,6 +609,7 @@ class DCMQtreePy(QMainWindow):
             modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
         modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
         dcmwrite(path, modified_ds, write_like_original=False)
+
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
         add_element_dialog.setProperty("help_id", "add_public_element_dialog")
