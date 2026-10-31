@@ -175,12 +175,13 @@ jobs:
             dist/dcmQTreePy.exe.sha256
 
   build-macos-arm64:
-    # arm64 only: macos-14 is an arm64 image and the notarisation path is wired to the .app
-    # it builds natively. Users on Intel install PySide6's universal2 wheels themselves; an
-    # Intel release build would be a separate runner and a separate decision (#31's family).
+    # JOBS 1 of the #46-finding-1 three-job split (cyril's shape). NO signing secrets and NOT in
+    # the `release` environment: this job builds an ad-hoc (PyInstaller default) bundle and runs
+    # the deep --selftest on it. The .app executing here is the WHOLE POINT — untrusted build
+    # output must never coexist with P12/P8. Signed-bytes testing lives in verify-macos-arm64,
+    # also secret-free. arm64 only (macos-14 is arm64); Intel would be a separate decision.
     needs: verify-inputs
     runs-on: macos-14
-    environment: release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
@@ -219,18 +220,74 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$PLIST"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
-      - name: Entitlements (hardened runtime; allow-unsigned-executable-memory for embedded Python)
+      - name: Deep smoke via --selftest (hidden entry point, ad-hoc bundle, offscreen)
+        timeout-minutes: 5
         run: |
-          cat > "$RUNNER_TEMP/entitlements.plist" <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-            <true/>
-          </dict>
-          </plist>
-          EOF
+          # JOBS 1 smoke: opens CT_small.dcm through the app's own path, saves it byte-identical,
+          # renders in the bundled viewer, decodes an in-memory signed j2k. Runs on the PRE-
+          # Developer-ID, ad-hoc-signed bundle (PyInstaller signs ad-hoc by default) — proving the
+          # build is alive BEFORE any secret is loaded. cyril's #46 correction: the .app must NOT
+          # execute in the secrets-bearing notarize job, so its deep test moves UP here, secret-free.
+          # Probed on macOS arm64 (this host): ad-hoc bundle selftest rc 0, full pipeline green.
+          set -euo pipefail
+          CT_SMALL="$(uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')")"
+          echo "sample stays on the runner: $CT_SMALL"
+          [ -f "$CT_SMALL" ] || { echo "::error::CT_small.dcm not found in locked venv"; exit 1; }
+          ./dist/dcmQTreePy.app/Contents/MacOS/dcmQTreePy --selftest "$CT_SMALL" --platform offscreen
+          # Bundle hygiene (cora's round-five catch, unchanged intent): assert $APP exists before
+          # guarding it, capture find's output, grep the CAPTURED output (never grep -q a live pipe
+          # — early close is a SIGPIPE the pipeline reports as success). Executables-only in
+          # Contents/MacOS; no test_files DICOM anywhere in the bundle.
+          APP="dist/dcmQTreePy.app"
+          [ -d "$APP" ] || { echo "::error::bundle $APP missing at smoke step"; exit 1; }
+          DCMS="$(find "$APP" -type f -name '*.dcm')"
+          if printf '%s\n' "$DCMS" | grep 'test_files.*\.dcm$' >/dev/null; then
+            echo "::error::test_files DICOM inside the app bundle:"
+            printf '%s\n' "$DCMS" | grep 'test_files.*\.dcm$'
+            exit 1
+          fi
+          if printf '%s\n' "$DCMS" | grep 'Contents/MacOS/' >/dev/null; then
+            echo "::error::data file in Contents/MacOS (executables only):"
+            printf '%s\n' "$DCMS" | grep 'Contents/MacOS/'
+            exit 1
+          fi
+          printf 'bundle .dcm inventory (library data only): %s\n' "${DCMS:-none}"
+          echo "ad-hoc bundle smoke passed and bundle verified free of test data"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-arm64-adhoc-app
+          path: dist/dcmQTreePy.app
+          if-no-files-found: error
+          # .app is a bundle (symlinks, executable bits, deep structure) — round-trip it with
+          # the archive format artifact v4 uses and restore with tar, NOT cp, so the layout the
+          # notarize job signs is byte-for-byte the layout the build job self-tested.
+
+  notarize-macos-arm64:
+    # JOBS 2 of the split. THIS is the only job that holds APPLE_SIGNING_P12*/APPLE_API_* and the
+    # only job in the `release` protected environment. It consumes the ad-hoc .app artifact, signs
+    # inside-out, notarises, staples, builds+signs+notarises the dmg, and purges — all in ONE job
+    # so the same-job keychain-purge guarantee (#34 blocker 1) is intact. It NEVER runs the app:
+    # codesign/hdiutil/notarytool operate on the bundle as FILES and do not launch the binary
+    # (verified this host). Signed-bytes testing lives in the secret-free verify job, not here —
+    # cyril's #46 correction: executing the build output where a secret is present is the vector.
+    needs: [verify-inputs, build-macos-arm64]
+    runs-on: macos-14
+    environment: release
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: macos-arm64-adhoc-app
+          path: dist
+      - name: Confirm the ad-hoc bundle arrived and is PyInstaller's output (not executed)
+        run: |
+          # Fail closed if the artifact didn't land. Inspect with codesign -dv (read-only, does
+          # NOT launch) — this is file inspection, not execution. ad-hoc until we re-sign below.
+          set -euo pipefail
+          APP="dist/dcmQTreePy.app"
+          [ -d "$APP" ] || { echo "::error::ad-hoc .app artifact missing in $APP"; exit 1; }
+          [ -x "$APP/Contents/MacOS/dcmQTreePy" ] || { echo "::error::main executable missing (not run here, only checked present)"; exit 1; }
+          codesign -dv "$APP" 2>&1 | sed 's/^/codesign -dv: /'
+          echo "ad-hoc bundle present, about to apply Developer ID (this job will not run it)"
       - name: Decode certificate into an ephemeral keychain (fails closed)
         env:
           P12_B64: ${{ secrets.APPLE_SIGNING_P12_BASE64 }}
@@ -246,6 +303,21 @@ jobs:
           security import "$RUNNER_TEMP/signing.p12" -k "$KEYCHAIN" -P "$P12_PW" -T /usr/bin/codesign -f pkcs12
           security set-key-partition-list -S apple-tool:,apple: -s -k "ci-ephemeral" "$KEYCHAIN"
           security list-keychains -s "$KEYCHAIN"
+      - name: Entitlements (hardened runtime; allow-unsigned-executable-memory for embedded Python)
+        # Regenerated here (not carried in the artifact): it is build input in this repo, and the
+        # signing job should not depend on a file that travelled through an artifact for a security
+        # parameter. Same content as before.
+        run: |
+          cat > "$RUNNER_TEMP/entitlements.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
       - name: Sign inside-out (every Mach-O, deepest first; then frameworks; then bundle), hardened + timestamp
         shell: bash
         env:
@@ -276,43 +348,6 @@ jobs:
           codesign --force --timestamp --options runtime \
             --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$APP"
           codesign --verify --strict --deep --verbose=2 "$APP"
-      - name: Deep smoke via --selftest (hidden entry point, signed bundle, offscreen)
-        timeout-minutes: 5
-        run: |
-          # cyril's #34 blocker 2 + cora's round-four blocker: the SIGNED app must open a
-          # DICOM file, save it byte-identical and render it in the bundled viewer — but NO
-          # test data inside the user's app. The sample stays in the runner's venv and is
-          # passed BY PATH; Contents/MacOS holds executables only (Apple bundle layout), so
-          # the earlier cp into the bundle is gone. Runs AFTER signing, before dmg — the
-          # exact bundle that gets notarised is the bundle that gets tested.
-          set -euo pipefail
-          CT_SMALL="$(uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')")"
-          echo "sample stays on the runner: $CT_SMALL"
-          [ -f "$CT_SMALL" ] || { echo "::error::CT_small.dcm not found in locked venv"; exit 1; }
-          ./dist/dcmQTreePy.app/Contents/MacOS/dcmQTreePy --selftest "$CT_SMALL" --platform offscreen
-          # cora's round-five catch: $APP is step-scoped — redeclare it HERE and assert it
-          # exists before guarding it (an empty $APP made find scan the workspace and read
-          # whatever it matched as clean). cyril's shape of the same catch: capture find's
-          # output first, let set -e fail the step on a broken find, and grep the CAPTURED
-          # output — grep -q closing the pipe early is a SIGPIPE the pipeline would report.
-          # Guards the bundle only. Its pydicom data (charset_files/, palettes/ — what the
-          # locked PyInstaller hook collects) legitimately rides along; test data may not:
-          # no test_files/*.dcm anywhere in the bundle, no data file in Contents/MacOS.
-          APP="dist/dcmQTreePy.app"
-          [ -d "$APP" ] || { echo "::error::bundle $APP missing at smoke step"; exit 1; }
-          DCMS="$(find "$APP" -type f -name '*.dcm')"
-          if printf '%s\n' "$DCMS" | grep 'test_files.*\.dcm$' >/dev/null; then
-            echo "::error::test_files DICOM inside the app bundle:"
-            printf '%s\n' "$DCMS" | grep 'test_files.*\.dcm$'
-            exit 1
-          fi
-          if printf '%s\n' "$DCMS" | grep 'Contents/MacOS/' >/dev/null; then
-            echo "::error::data file in Contents/MacOS (executables only):"
-            printf '%s\n' "$DCMS" | grep 'Contents/MacOS/'
-            exit 1
-          fi
-          printf 'bundle .dcm inventory (library data only): %s\n' "${DCMS:-none}"
-          echo "signed bundle smoke passed and bundle verified free of test data"
       - name: Notarize the .app (submit .zip, wait, staple, validate)
         env:
           P8: ${{ secrets.APPLE_API_KEY_P8 }}
@@ -349,7 +384,7 @@ jobs:
           # Gatekeeper assessment on a CI runner is advisory only (no user session): failure is a
           # warning, not an abort. stapler validate above is the notarisation proof. Before the
           # first PUBLIC release: open the stapled dmg on a clean macOS 14 VM and launch it
-          # (Violet's pre-public checklist, #34 review).
+          # (Violet's pre-public checklist, #34 review). spctl --assess inspects, does not run.
           spctl --assess --type execute --verbose=4 dist/dcmQTreePy.app || \
             echo "::warning::spctl assess failed on runner — advisory; stapler validate is the proof"
       - name: Checksum
@@ -358,15 +393,10 @@ jobs:
       - name: Purge ephemeral material
         if: always()
         run: |
-          # cyril's #34 blocker 1: no swallowed errors. The old form was
-          # `security delete-keychain ... 2>/dev/null || true` followed by an
-          # unconditional "purged" echo — a failed delete would have reported
-          # success. Now: capture the delete's real exit code, then independently
-          # prove the keychain is gone (show-keychain-info only answers for a keychain
-          # that still exists), then purge the key files and verify each is absent.
-          # Any residue fails the step with an explicit ::error::, naming what survived.
-          # Probed locally: happy path rc 0, unremovable residue rc 1 naming the file,
-          # already-purged re-run rc 0 (idempotent).
+          # cyril's #34 blocker 1: no swallowed errors. Same-job purge preserved verbatim — this
+          # is the job that created the keychain and touched the secrets, so this is the job that
+          # must destroy them, and it must prove it. Probed locally: happy path rc 0, unremovable
+          # residue rc 1 naming the file, already-purged re-run rc 0 (idempotent).
           set -u
           KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
           RC=0
@@ -397,21 +427,102 @@ jobs:
           path: |
             dist/dcmQTreePy-arm64.dmg
             dist/dcmQTreePy-arm64.dmg.sha256
+          if-no-files-found: error
+
+  verify-macos-arm64:
+    # JOBS 3 of the split. NO secrets, NOT in the `release` environment. Downloads the SIGNED,
+    # notarised, STAPLED dmg from job 2, mounts it read-only, and runs the deep --selftest against
+    # the .app AS SHIPPED — the exact bytes the public will open. This is cyril's #46 correction to
+    # my earlier design: keeping the signed-bytes test, but OUT of the secrets job. Publishing
+    # `needs:` this job, so nothing ships untested. The app running here (in a secret-free job) is
+    # not the vector — it is the reason the split is safe to make. Verified this host: app runs and
+    # self-tests OK from a mounted read-only dmg, rc 0.
+    needs: [verify-inputs, notarize-macos-arm64]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.9.9"
+          enable-cache: true
+      - name: Install pinned dependencies (for the pydicom sample path only — no build here)
+        run: uv sync --locked --dev
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: macos-arm64-signed-notarised
+          path: inbound
+      - name: Verify dmg integrity against the published checksum
+        run: |
+          set -euo pipefail
+          [ -s inbound/dcmQTreePy-arm64.dmg ] || { echo "::error::signed dmg artifact missing"; exit 1; }
+          [ -s inbound/dcmQTreePy-arm64.dmg.sha256 ] || { echo "::error::checksum missing"; exit 1; }
+          (cd inbound && shasum -a 256 -c dcmQTreePy-arm64.dmg.sha256)
+          hdiutil verify inbound/dcmQTreePy-arm64.dmg
+      - name: Mount read-only and self-test the shipped signed bundle
+        timeout-minutes: 5
+        run: |
+          # The whole point of the split: run the SHIPPED bytes with NO secret in scope. Attach
+          # read-only (-readonly -nobrowse), locate the .app on the mount, run --selftest against
+          # pydicom's sample passed BY PATH (sample lives in the venv, never copied into the app),
+          # then ALWAYS detach in a cleanup so a mid-test failure cannot leave a mounted volume.
+          set -euo pipefail
+          MNT="$RUNNER_TEMP/dcm-mnt"
+          mkdir -p "$MNT"
+          DETACHED=0
+          cleanup() {
+            if [ "$DETACHED" -eq 0 ]; then
+              hdiutil detach "$MNT" -force || echo "::warning::detach in cleanup failed (volume may already be gone)"
+            fi
+          }
+          trap cleanup EXIT
+          hdiutil attach inbound/dcmQTreePy-arm64.dmg -readonly -nobrowse -mountpoint "$MNT"
+          APP="$MNT/dcmQTreePy.app"
+          [ -d "$APP" ] || { echo "::error::no .app on mounted dmg"; exit 1; }
+          codesign -dv "$APP" 2>&1 | sed 's/^/mounted bundle identity: /'
+          spctl --assess --type execute --verbose=4 "$APP" 2>&1 | sed 's/^/mounted spctl: /' || \
+            echo "::warning::spctl assess advisory on runner; stapler validate in job 2 is the notarisation proof"
+          CT_SMALL="$(uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')")"
+          [ -f "$CT_SMALL" ] || { echo "::error::CT_small.dcm not found in locked venv"; exit 1; }
+          "$APP/Contents/MacOS/dcmQTreePy" --selftest "$CT_SMALL" --platform offscreen
+          hdiutil detach "$MNT" && DETACHED=1
+          echo "verify: shipped signed bundle self-tested OK, secret-free"
+      - name: Confirm notarisation ticket is stapled (independent re-check)
+        run: |
+          # stapler validate reads the ticket off the dmg without mounting or running — an
+          # independent proof of notarisation state that belongs in a job that does not run the app.
+          set -euo pipefail
+          xcrun stapler validate inbound/dcmQTreePy-arm64.dmg
+          echo "verify: notarisation ticket stapled on the shipped dmg"
+
 
   publish-release:
     # Single serial publisher: one release object, both platforms' assets, created only after
     # both builds are green. Re-checks the tag (from verify-inputs) is free at publish time —
     # 404 only, anything else stops.
-    needs: [verify-inputs, build-windows, build-macos-arm64]
+    # needs verify-macos-arm64 (#46 split): nothing publishes until the SHIPPED signed bytes have
+    # self-tested in the secret-free verify job. verify needs notarize needs build, so this single
+    # edge transitively gates the whole macOS chain AND adds the signed-bytes test as a hard
+    # precondition. Windows unchanged (unsigned, self-tested in build-windows).
+    needs: [verify-inputs, build-windows, verify-macos-arm64]
     runs-on: ubuntu-latest
     environment: release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # #46 finding-1 split: publish must pull ONLY the two shippable artifacts by name, NOT
+      # pattern "*". The split introduced a third artifact — macos-arm64-adhoc-app (the pre-
+      # Developer-ID bundle job 1 self-tests and job 2 consumes) — which is an intermediate, never
+      # a release asset. A wildcard download would merge that loose .app directory into
+      # release-assets/ and gh release create would publish it next to the signed dmg: an unsigned
+      # bundle on the public release page. Each name downloads into release-assets/ (merge-multiple
+      # false is per-name here, so both land flat and `shasum -c` + `release-assets/*` stay valid).
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          pattern: "*"
+          name: macos-arm64-signed-notarised
           path: release-assets
-          merge-multiple: true
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: windows-unsigned
+          path: release-assets
       - name: Final gate — tag still free (404 only), assets present and checksummed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
