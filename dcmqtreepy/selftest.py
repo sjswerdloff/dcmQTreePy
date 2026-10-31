@@ -226,7 +226,14 @@ def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None, repor
         report(f"selftest: input does not exist: {src}", err=True)
         return finish(2)
 
-    original_bytes = src.read_bytes()
+    try:
+        original_bytes = src.read_bytes()
+    except OSError as exc:
+        # PermissionError/IsADirectoryError must write a report, not raise: on a
+        # --windowed runner an uncaught traceback here skips finish() entirely and
+        # the CI step's Get-Content of report_path finds nothing (#46 Sourcery 7).
+        report(f"selftest: cannot read input {src}: {exc}", err=True)
+        return finish(2)
     if not original_bytes:
         report(f"selftest: input is empty: {src}", err=True)
         return finish(2)
