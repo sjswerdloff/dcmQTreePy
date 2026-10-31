@@ -1,0 +1,601 @@
+name: Release
+
+# Release pipeline for dcmQTreePy (Refs #33). macOS arm64 .app is signed, notarised and
+# stapled into a dmg; the Windows onefile exe ships unsigned by design (cyril's brief), with a
+# SHA-256 asset beside it. Everything runs behind the `release` protected environment — Stuart
+# approves each dispatch before any job executes. Secrets and variable come from Stuart; the
+# workflow names them here and fails closed when absent:
+#   APPLE_SIGNING_P12_BASE64   Developer ID Application certificate (.p12), base64
+#   APPLE_SIGNING_P12_PASSWORD the .p12 export password
+#   APPLE_API_KEY_P8           App Store Connect API private key (.p8 contents)
+#   APPLE_API_KEY_ID           the .p8's Key ID   APPLE_API_ISSUER_ID the issuer UUID
+#   repo variable CODESIGN_IDENTITY  "Developer ID Application: <name> (TEAMID)"
+# The `release` environment must be configured to allow deployments only from main (Settings →
+# Environments → release → Deployment branches); verify-inputs checks it too, so a mis-set
+# environment stops rather than releasing a feature branch. All workflow: inputs and the runtime
+# tag go through env:, never interpolated into run: scripts. Actions pinned by commit SHA, each
+# verified against GitHub's tag/ls-remote API at composition time, re-verified by cora at
+# f3814f7. NOT YET RUN against a live runner: first dispatch with Stuart's secrets is the test
+# date. Violet's seat: inside-out signing, entitlements, clean-VM launch before public release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: "CFBundleVersion build number stamped into the macOS bundle (integer)"
+        required: true
+        type: string
+        default: "1"
+
+permissions:
+  # #46 finding-1 review (cyril): workflow-level contents:write propagated a WRITE-scoped
+  # GITHUB_TOKEN to EVERY job, and actions/checkout persists that token in .git/config by
+  # default — so the jobs that RUN untrusted build output (build-macos, verify-macos,
+  # build-windows) held a credential able to push tags / create releases. Least privilege:
+  # default the whole workflow to read, grant write ONLY to publish-release, and turn off
+  # persisted credentials on every checkout (nothing here git-pushes — all writes are via gh
+  # with an explicit GH_TOKEN in env:, never via a git-stored credential).
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12" # the floor (README Requirements, #30): the release builds on the minimum supported interpreter
+
+jobs:
+  verify-inputs:
+    # Cheap gate before any build minute is spent. Runs in the protected environment too, so
+    # even the checks happen post-approval — nothing anonymous ever runs here.
+    runs-on: ubuntu-latest
+    environment: release
+    outputs:
+      version: ${{ steps.tagfrompyproject.outputs.version }}
+      tag: ${{ steps.tagfrompyproject.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
+      - name: dispatch is from main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          [ "$REF" = "refs/heads/main" ] || { echo "::error::release must be dispatched from main, got $REF"; exit 1; }
+          echo "dispatch ref: $REF"
+      - name: build number integer
+        env:
+          BUILD: ${{ inputs.build_number }}
+        run: |
+          echo "$BUILD" | grep -Eq '^[0-9]+$' || { echo "::error::build_number must be an integer"; exit 1; }
+          echo "build number: $BUILD"
+      - name: tag comes from pyproject (never typed — tag cannot disagree with the package)
+        id: tagfrompyproject
+        run: |
+          V="$(grep -m1 -E '^version *=' pyproject.toml | sed -E 's/^version *= *"([^"]+)".*/\1/')"
+          [ -n "$V" ] || { echo "::error::could not read version from pyproject.toml"; exit 1; }
+          echo "package version: v$V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+      - name: tag is free (HTTP 404 only; anything else stops)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tagfrompyproject.outputs.tag }}
+        run: |
+          RC=0
+          gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" --silent >/dev/null 2>&1 || RC=$?
+          if [ "$RC" -eq 0 ]; then
+            echo "::error::tag $TAG already exists — bump pyproject's version first"; exit 1; fi
+          OUT="$(gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" 2>&1 || true)"
+          case "$OUT" in
+            *"Not Found"*|*"404"*) echo "tag $TAG is free (404)" ;;
+            *) echo "::error::tag lookup failed, refusing to assume free: $OUT"; exit 1 ;;
+          esac
+      - name: signing identity variable configured (vars context, not gh api — GITHUB_TOKEN cannot read variables)
+        env:
+          V: ${{ vars.CODESIGN_IDENTITY }}
+        run: |
+          [ -n "$V" ] || { echo "::error::repo variable CODESIGN_IDENTITY not set — Stuart sets 'Developer ID Application: <name> (TEAMID)' before the first run"; exit 1; }
+          echo "codesign identity: $V"
+      - name: release secrets present (length-checked, never printed)
+        env:
+          P12: ${{ secrets.APPLE_SIGNING_P12_BASE64 }}
+          PW: ${{ secrets.APPLE_SIGNING_P12_PASSWORD }}
+          P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          KEYID: ${{ secrets.APPLE_API_KEY_ID }}
+          ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          [ -n "$P12" ] || { echo "::error::APPLE_SIGNING_P12_BASE64 is empty"; exit 1; }
+          [ -n "$PW" ] || { echo "::error::APPLE_SIGNING_P12_PASSWORD is empty"; exit 1; }
+          [ -n "$P8" ] || { echo "::error::APPLE_API_KEY_P8 is empty"; exit 1; }
+          [ -n "$KEYID" ] || { echo "::error::APPLE_API_KEY_ID is empty"; exit 1; }
+          [ -n "$ISSUER" ] || { echo "::error::APPLE_API_ISSUER_ID is empty"; exit 1; }
+          echo "all five signing secrets non-empty (values never printed)"
+
+  build-windows:
+    # Unsigned by design; the checksum asset is the integrity receipt for users.
+    needs: verify-inputs
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.9.9"
+          enable-cache: true
+      - name: Install pinned dependencies
+        shell: bash
+        run: uv sync --locked --dev
+      - name: Which interpreter
+        shell: bash
+        run: uv run --locked python --version
+      - name: PyInstaller onefile (Windows)
+        shell: bash
+        run: |
+          uv run --locked pyinstaller --onefile --name=dcmQTreePy --windowed --disable-windowed-traceback \
+            --icon=help/icons/app_icon.png --add-data="help;help" \
+            dcmqtreepy/dcmQTree.py
+      - name: Smoke-run headless
+        shell: pwsh
+        run: |
+          # GUI app, no console: started, alive after 20s is the assertion, then stopped.
+          $p = Start-Process -FilePath "dist\dcmQTreePy.exe" -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { Write-Error "exe exited early with code $($p.ExitCode)"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+          Write-Output "exe ran 20s without exiting"
+      - name: Deep smoke via --selftest (hidden entry point, offscreen)
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          # cyril's #34 blocker 2: #33 asks the packaged build to open a DICOM file, save it
+          # unchanged (byte comparison) and view an image — "alive after 20s" does not prove it.
+          # The GUI event loop cannot run headless, so the packaged exe carries a hidden
+          # --selftest flag (dcmqtreepy/selftest.py): constructs the main window on the offscreen
+          # QPA plugin, opens pydicom's CT_small.dcm through the app's own open path, writes it
+          # back byte-identical with the app's writer finalization, renders it in the bundled
+          # dcm_mini_viewer, and exits non-zero naming every failed stage. Byte-identity is
+          # against the packaged writer's own output, not the tree round trip — probed before
+          # wiring, the tree path re-serializes binary values as text and fails on the app's
+          # known save scope ("until save as is working"), which would test a promise #33 does
+          # not make of CI. Save-unchanged-through-the-GUI stays a manual acceptance item
+          # (Stuart's scope call, per cyril's review).
+          # cyril/cora/connor round four: the sample is passed BY PATH, never copied into
+          # dist or the bundle — the exe opens the runner's own locked-venv file. The
+          # bundle test-data guards (Contents/MacOS executables-only, no test_files) live
+          # on the macOS smoke step, where the bundle layout exists; this step's honest
+          # guarantee is that nothing is copied into dist\ here.
+          # connor's two: timeout-minutes caps a hung Start-Process at 5 instead of 360;
+          # a --windowed exe has sys.stderr == None, so the report goes to a file via
+          # --report and the step Get-Content's it (rc 2 = usage/bad sample, rc 1 =
+          # stage failure, both land in the log now).
+          $CT_SMALL = (uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')").Trim()
+          if (-not (Test-Path $CT_SMALL)) { Write-Error "CT_small.dcm not found in locked venv"; exit 1 }
+          $REPORT = Join-Path $env:RUNNER_TEMP "selftest.txt"
+          $p = Start-Process -FilePath "dist\dcmQTreePy.exe" -ArgumentList "--selftest",$CT_SMALL,"--platform","offscreen","--report",$REPORT -Wait -PassThru
+          if (Test-Path $REPORT) { Get-Content $REPORT } else { Write-Output "no report file produced at $REPORT" }
+          if ($p.ExitCode -ne 0) { Write-Error "selftest exited $($p.ExitCode) — see selftest report above"; exit 1 }
+          Write-Output "packaged selftest passed: window built offscreen, CT_small.dcm opened, saved byte-identical, rendered in bundled viewer"
+      - name: Checksum
+        shell: bash
+        run: |
+          cd dist && sha256sum dcmQTreePy.exe > dcmQTreePy.exe.sha256 && cat dcmQTreePy.exe.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-unsigned
+          path: |
+            dist/dcmQTreePy.exe
+            dist/dcmQTreePy.exe.sha256
+
+  build-macos-arm64:
+    # JOBS 1 of the #46-finding-1 three-job split (cyril's shape). NO signing secrets and NOT in
+    # the `release` environment: this job builds an ad-hoc (PyInstaller default) bundle and runs
+    # the deep --selftest on it. The .app executing here is the WHOLE POINT — untrusted build
+    # output must never coexist with P12/P8. Signed-bytes testing lives in verify-macos-arm64,
+    # also secret-free. arm64 only (macos-14 is arm64); Intel would be a separate decision.
+    needs: verify-inputs
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.9.9"
+          enable-cache: true
+      - name: Install pinned dependencies
+        run: uv sync --locked --dev
+      - name: Which interpreter
+        run: uv run --locked python --version
+      - name: Import contract before building
+        run: |
+          # cora's #30 contract: frozen modules import on the floor interpreter
+          uv run --locked python -c "import dcmqtreepy.dcmQTree, dcm_mini_viewer, pydicom, numpy; print('imports ok', pydicom.__version__, numpy.__version__)"
+      - name: PyInstaller onedir (.app)
+        run: |
+          # --disable-windowed-traceback (connor's #34): a --windowed build shows an
+          # uncaught exception in a GUI traceback dialog — on a headless runner nobody
+          # closes it and the job hangs until the 6h limit. Disabled, it exits non-zero.
+          # pydicom's test_files never enter the bundle: the official hook collects
+          # only charset_files/* + palettes/* (verified against hook-pydicom.py in the
+          # locked pyinstaller-hooks-contrib 2026.9), and the smoke passes its sample
+          # by path, so no test data is copied in anywhere.
+          uv run --locked pyinstaller --onedir --name=dcmQTreePy --windowed --disable-windowed-traceback \
+            --icon=help/icons/app_icon.png --add-data="help:help" \
+            --osx-bundle-identifier=co.sjswerdloff.dcmQTreePy \
+            --distpath dist \
+            dcmqtreepy/dcmQTree.py
+      - name: Write version into the bundle plist, then rehash
+        env:
+          VERSION: ${{ needs.verify-inputs.outputs.version }}
+          BUILD: ${{ inputs.build_number }}
+        run: |
+          PLIST="dist/dcmQTreePy.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
+      - name: Deep smoke via --selftest (hidden entry point, ad-hoc bundle, offscreen)
+        timeout-minutes: 5
+        run: |
+          # JOBS 1 smoke: opens CT_small.dcm through the app's own path, saves it byte-identical,
+          # renders in the bundled viewer, decodes an in-memory signed j2k. Runs on the PRE-
+          # Developer-ID, ad-hoc-signed bundle (PyInstaller signs ad-hoc by default) — proving the
+          # build is alive BEFORE any secret is loaded. cyril's #46 correction: the .app must NOT
+          # execute in the secrets-bearing notarize job, so its deep test moves UP here, secret-free.
+          # Probed on macOS arm64 (this host): ad-hoc bundle selftest rc 0, full pipeline green.
+          set -euo pipefail
+          CT_SMALL="$(uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')")"
+          echo "sample stays on the runner: $CT_SMALL"
+          [ -f "$CT_SMALL" ] || { echo "::error::CT_small.dcm not found in locked venv"; exit 1; }
+          ./dist/dcmQTreePy.app/Contents/MacOS/dcmQTreePy --selftest "$CT_SMALL" --platform offscreen
+          # Bundle hygiene (cora's round-five catch, unchanged intent): assert $APP exists before
+          # guarding it, capture find's output, grep the CAPTURED output (never grep -q a live pipe
+          # — early close is a SIGPIPE the pipeline reports as success). Executables-only in
+          # Contents/MacOS; no test_files DICOM anywhere in the bundle.
+          APP="dist/dcmQTreePy.app"
+          [ -d "$APP" ] || { echo "::error::bundle $APP missing at smoke step"; exit 1; }
+          DCMS="$(find "$APP" -type f -name '*.dcm')"
+          if printf '%s\n' "$DCMS" | grep 'test_files.*\.dcm$' >/dev/null; then
+            echo "::error::test_files DICOM inside the app bundle:"
+            printf '%s\n' "$DCMS" | grep 'test_files.*\.dcm$'
+            exit 1
+          fi
+          if printf '%s\n' "$DCMS" | grep 'Contents/MacOS/' >/dev/null; then
+            echo "::error::data file in Contents/MacOS (executables only):"
+            printf '%s\n' "$DCMS" | grep 'Contents/MacOS/'
+            exit 1
+          fi
+          printf 'bundle .dcm inventory (library data only): %s\n' "${DCMS:-none}"
+          echo "ad-hoc bundle smoke passed and bundle verified free of test data"
+      - name: Archive the ad-hoc bundle with ditto (preserve exec bits + framework symlinks)
+        run: |
+          # #46 finding-1 review (cyril + cora, both): upload-artifact with a bare directory does
+          # NOT preserve file modes or symlinks — it stores symlinks as copies of their targets and
+          # drops the executable bit. A PyInstaller onedir .app needs BOTH (the Contents/MacOS/
+          # dcmQTreePy exec bit and the Qt *.framework/Versions/Current symlinks), or the notarize
+          # job signs a reshaped, unsealable bundle. Fix: ditto -c -k --keepParent makes an archive
+          # that preserves modes, symlinks, and the bundle's top directory; notarize restores with
+          # ditto -x -k. Proven THIS host: ditto round-trip keeps exe bit -rwxr-xr-x@ and all 130
+          # symlinks, and the restored bundle self-tests rc 0.
+          set -euo pipefail
+          test -d dist/dcmQTreePy.app || { echo "::error::built bundle missing before archive"; exit 1; }
+          ditto -c -k --keepParent dist/dcmQTreePy.app dist/dcmQTreePy-adhoc.zip
+          test -s dist/dcmQTreePy-adhoc.zip || { echo "::error::ditto produced empty zip"; exit 1; }
+          # SHA-256 of the EXACT bytes uploaded; notarize re-checks after download so the bundle it
+          # signs is provably the bundle that was self-tested here (integrity across the job hop).
+          (cd dist && shasum -a 256 dcmQTreePy-adhoc.zip > dcmQTreePy-adhoc.zip.sha256 && cat dcmQTreePy-adhoc.zip.sha256)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-arm64-adhoc-app
+          path: |
+            dist/dcmQTreePy-adhoc.zip
+            dist/dcmQTreePy-adhoc.zip.sha256
+          if-no-files-found: error
+
+  notarize-macos-arm64:
+    # JOBS 2 of the split. THIS is the only job that holds APPLE_SIGNING_P12*/APPLE_API_* and the
+    # only job in the `release` protected environment. It consumes the ad-hoc .app artifact, signs
+    # inside-out, notarises, staples, builds+signs+notarises the dmg, and purges — all in ONE job
+    # so the same-job keychain-purge guarantee (#34 blocker 1) is intact. It NEVER runs the app:
+    # codesign/hdiutil/notarytool operate on the bundle as FILES and do not launch the binary
+    # (verified this host). Signed-bytes testing lives in the secret-free verify job, not here —
+    # cyril's #46 correction: executing the build output where a secret is present is the vector.
+    needs: [verify-inputs, build-macos-arm64]
+    runs-on: macos-14
+    environment: release
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: macos-arm64-adhoc-app
+          path: dist
+      - name: Verify the ad-hoc zip's SHA-256, then restore with ditto (preserve bits + symlinks)
+        run: |
+          # #46 finding-1 review (cyril + cora): the bundle crosses jobs as a ditto zip, NOT a bare
+          # directory, so its exec bit and 130 framework symlinks survive. Check the zip's SHA-256
+          # against the checksum the build job stamped — the bytes signed here are provably the bytes
+          # self-tested upstream. Then ditto -x -k restores the bundle intact. None of this launches
+          # the app; it is hash-check + archive-extract + read-only inspection.
+          set -euo pipefail
+          ZIP="dist/dcmQTreePy-adhoc.zip"
+          SHA="dist/dcmQTreePy-adhoc.zip.sha256"
+          [ -s "$ZIP" ] || { echo "::error::ad-hoc zip artifact missing"; exit 1; }
+          [ -s "$SHA" ] || { echo "::error::ad-hoc zip checksum missing"; exit 1; }
+          (cd dist && shasum -a 256 -c dcmQTreePy-adhoc.zip.sha256) || { echo "::error::ad-hoc zip SHA mismatch"; exit 1; }
+          ditto -x -k "$ZIP" dist/
+          APP="dist/dcmQTreePy.app"
+          [ -d "$APP" ] || { echo "::error::no .app after ditto extract"; exit 1; }
+          # Integrity assertions (all read-only, none execute): exec bit preserved, symlinks intact.
+          [ -x "$APP/Contents/MacOS/dcmQTreePy" ] || { echo "::error::main executable lost its exec bit in transit"; exit 1; }
+          LINKS="$(find "$APP" -type l | wc -l | tr -d ' ')"
+          [ "$LINKS" -gt 0 ] || { echo "::error::no symlinks in restored bundle (ditto -k failed to preserve)"; exit 1; }
+          codesign -dv "$APP" 2>&1 | sed 's/^/codesign -dv: /'
+          echo "ad-hoc bundle restored via ditto (exe bit + $LINKS symlinks intact), about to apply Developer ID (this job will not run it)"
+      - name: Decode certificate into an ephemeral keychain (fails closed)
+        env:
+          P12_B64: ${{ secrets.APPLE_SIGNING_P12_BASE64 }}
+          P12_PW: ${{ secrets.APPLE_SIGNING_P12_PASSWORD }}
+        run: |
+          [ -n "$P12_B64" ] || { echo "::error::APPLE_SIGNING_P12_BASE64 secret is empty"; exit 1; }
+          echo "$P12_B64" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          [ -s "$RUNNER_TEMP/signing.p12" ] || { echo "::error::decoded certificate is empty"; exit 1; }
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          security create-keychain -p "ci-ephemeral" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "ci-ephemeral" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KEYCHAIN" -P "$P12_PW" -T /usr/bin/codesign -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "ci-ephemeral" "$KEYCHAIN"
+          security list-keychains -s "$KEYCHAIN"
+      - name: Entitlements (hardened runtime; allow-unsigned-executable-memory for embedded Python)
+        # Regenerated here (not carried in the artifact): it is build input in this repo, and the
+        # signing job should not depend on a file that travelled through an artifact for a security
+        # parameter. Same content as before.
+        run: |
+          cat > "$RUNNER_TEMP/entitlements.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+      - name: Sign inside-out (every Mach-O, deepest first; then frameworks; then bundle), hardened + timestamp
+        shell: bash
+        env:
+          IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
+        run: |
+          set -euo pipefail
+          APP="dist/dcmQTreePy.app"
+          # Violet + connor, #34 round two: Qt ships as extension-less .framework binaries, so a
+          # *.dylib/*.so glob misses QtCore and friends — and a bare find|while pipe can swallow a
+          # failed sign (loop runs in a subshell; a non-zero codesign inside it never reaches the
+          # step status). Fix: collect into files and feed the loop by redirect (no pipeline, so
+          # no swallowed exit), select by Mach-O CONTENT not name, and sign in order: loose Mach-O
+          # binaries deepest-first, then each *.framework bundle deepest-first (codesign rewrites
+          # the bundle seal), then the .app itself. set -e stops the step on any failed sign.
+          LIST="$RUNNER_TEMP/macho-list"
+          find "$APP" -type f -print0 > "$LIST"
+          while IFS= read -r -d '' F; do
+            if file -b "$F" | grep -q '^Mach-O'; then
+              codesign --force --timestamp --options runtime \
+                --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$F"
+            fi
+          done < <(sort -z -r "$LIST")
+          # frameworks: sign the bundle directory itself, deepest first, after its binaries
+          while IFS= read -r -d '' FW; do
+            codesign --force --timestamp --options runtime \
+              --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$FW"
+          done < <(find "$APP" -type d -name '*.framework' -print0 | sort -z -r)
+          codesign --force --timestamp --options runtime \
+            --entitlements "$RUNNER_TEMP/entitlements.plist" --sign "$IDENTITY" "$APP"
+          codesign --verify --strict --deep --verbose=2 "$APP"
+      - name: Notarize the .app (submit .zip, wait, staple, validate)
+        env:
+          P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          KEYID: ${{ secrets.APPLE_API_KEY_ID }}
+          ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          printf '%s\n' "$P8" > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+          ditto -c -k --keepParent dist/dcmQTreePy.app "$RUNNER_TEMP/app-submit.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/app-submit.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$KEYID" --issuer "$ISSUER" --wait
+          xcrun stapler staple dist/dcmQTreePy.app
+          xcrun stapler validate dist/dcmQTreePy.app
+      - name: Build dmg and verify
+        run: |
+          rm -f dist/dcmQTreePy-arm64.dmg
+          hdiutil create -volname dcmQTreePy -srcfolder dist/dcmQTreePy.app -ov -format UDZO dist/dcmQTreePy-arm64.dmg
+          hdiutil verify dist/dcmQTreePy-arm64.dmg
+      - name: Sign, notarize and staple the dmg (notarytool accepts dmg directly)
+        env:
+          IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
+          P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          KEYID: ${{ secrets.APPLE_API_KEY_ID }}
+          ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          codesign --timestamp --sign "$IDENTITY" dist/dcmQTreePy-arm64.dmg
+          codesign --verify --strict --verbose=2 dist/dcmQTreePy-arm64.dmg
+          xcrun notarytool submit dist/dcmQTreePy-arm64.dmg \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$KEYID" --issuer "$ISSUER" --wait
+          xcrun stapler staple dist/dcmQTreePy-arm64.dmg
+          xcrun stapler validate dist/dcmQTreePy-arm64.dmg
+      - name: Spctl assessment (advisory off-runner)
+        run: |
+          # Gatekeeper assessment on a CI runner is advisory only (no user session): failure is a
+          # warning, not an abort. stapler validate above is the notarisation proof. Before the
+          # first PUBLIC release: open the stapled dmg on a clean macOS 14 VM and launch it
+          # (Violet's pre-public checklist, #34 review). spctl --assess inspects, does not run.
+          spctl --assess --type execute --verbose=4 dist/dcmQTreePy.app || \
+            echo "::warning::spctl assess failed on runner — advisory; stapler validate is the proof"
+      - name: Checksum
+        run: |
+          cd dist && shasum -a 256 dcmQTreePy-arm64.dmg > dcmQTreePy-arm64.dmg.sha256 && cat dcmQTreePy-arm64.dmg.sha256
+      - name: Purge ephemeral material
+        if: always()
+        run: |
+          # cyril's #34 blocker 1: no swallowed errors. Same-job purge preserved verbatim — this
+          # is the job that created the keychain and touched the secrets, so this is the job that
+          # must destroy them, and it must prove it. Probed locally: happy path rc 0, unremovable
+          # residue rc 1 naming the file, already-purged re-run rc 0 (idempotent).
+          set -u
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          RC=0
+          security delete-keychain "$KEYCHAIN" || RC=$?
+          if [ "$RC" -ne 0 ]; then
+            echo "delete-keychain exited $RC — verifying whether the keychain is actually gone"
+          fi
+          PURGE_OK=1
+          if security show-keychain-info "$KEYCHAIN" 2>/dev/null; then
+            echo "::error::keychain $KEYCHAIN still exists after purge step"
+            PURGE_OK=0
+          fi
+          rm -f "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/app-submit.zip" "$RUNNER_TEMP/entitlements.plist"
+          for F in "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/app-submit.zip" "$RUNNER_TEMP/entitlements.plist"; do
+            if [ -e "$F" ]; then
+              echo "::error::secret file still present after purge: $F"
+              PURGE_OK=0
+            fi
+          done
+          if [ "$PURGE_OK" -ne 1 ]; then
+            echo "purge INCOMPLETE — residue listed above"
+            exit 1
+          fi
+          echo "purged: keychain verified gone, all four secret files verified absent"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-arm64-signed-notarised
+          path: |
+            dist/dcmQTreePy-arm64.dmg
+            dist/dcmQTreePy-arm64.dmg.sha256
+          if-no-files-found: error
+
+  verify-macos-arm64:
+    # JOBS 3 of the split. NO secrets, NOT in the `release` environment. Downloads the SIGNED,
+    # notarised, STAPLED dmg from job 2, mounts it read-only, and runs the deep --selftest against
+    # the .app AS SHIPPED — the exact bytes the public will open. This is cyril's #46 correction to
+    # my earlier design: keeping the signed-bytes test, but OUT of the secrets job. Publishing
+    # `needs:` this job, so nothing ships untested. The app running here (in a secret-free job) is
+    # not the vector — it is the reason the split is safe to make. Verified this host: app runs and
+    # self-tests OK from a mounted read-only dmg, rc 0.
+    needs: [verify-inputs, notarize-macos-arm64]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.9.9"
+          enable-cache: true
+      - name: Install pinned dependencies (for the pydicom sample path only — no build here)
+        run: uv sync --locked --dev
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: macos-arm64-signed-notarised
+          path: inbound
+      - name: Verify dmg integrity against the published checksum
+        run: |
+          set -euo pipefail
+          [ -s inbound/dcmQTreePy-arm64.dmg ] || { echo "::error::signed dmg artifact missing"; exit 1; }
+          [ -s inbound/dcmQTreePy-arm64.dmg.sha256 ] || { echo "::error::checksum missing"; exit 1; }
+          (cd inbound && shasum -a 256 -c dcmQTreePy-arm64.dmg.sha256)
+          hdiutil verify inbound/dcmQTreePy-arm64.dmg
+      - name: Mount read-only and self-test the shipped signed bundle
+        timeout-minutes: 5
+        run: |
+          # The whole point of the split: run the SHIPPED bytes with NO secret in scope. Attach
+          # read-only (-readonly -nobrowse), locate the .app on the mount, run --selftest against
+          # pydicom's sample passed BY PATH (sample lives in the venv, never copied into the app),
+          # then ALWAYS detach in a cleanup so a mid-test failure cannot leave a mounted volume.
+          set -euo pipefail
+          MNT="$RUNNER_TEMP/dcm-mnt"
+          mkdir -p "$MNT"
+          DETACHED=0
+          cleanup() {
+            if [ "$DETACHED" -eq 0 ]; then
+              hdiutil detach "$MNT" -force || echo "::warning::detach in cleanup failed (volume may already be gone)"
+            fi
+          }
+          trap cleanup EXIT
+          hdiutil attach inbound/dcmQTreePy-arm64.dmg -readonly -nobrowse -mountpoint "$MNT"
+          APP="$MNT/dcmQTreePy.app"
+          [ -d "$APP" ] || { echo "::error::no .app on mounted dmg"; exit 1; }
+          codesign -dv "$APP" 2>&1 | sed 's/^/mounted bundle identity: /'
+          spctl --assess --type execute --verbose=4 "$APP" 2>&1 | sed 's/^/mounted spctl: /' || \
+            echo "::warning::spctl assess advisory on runner; stapler validate in job 2 is the notarisation proof"
+          CT_SMALL="$(uv run --no-sync python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')")"
+          [ -f "$CT_SMALL" ] || { echo "::error::CT_small.dcm not found in locked venv"; exit 1; }
+          "$APP/Contents/MacOS/dcmQTreePy" --selftest "$CT_SMALL" --platform offscreen
+          hdiutil detach "$MNT" && DETACHED=1
+          echo "verify: shipped signed bundle self-tested OK, secret-free"
+      - name: Confirm notarisation ticket is stapled (independent re-check)
+        run: |
+          # stapler validate reads the ticket off the dmg without mounting or running — an
+          # independent proof of notarisation state that belongs in a job that does not run the app.
+          set -euo pipefail
+          xcrun stapler validate inbound/dcmQTreePy-arm64.dmg
+          echo "verify: notarisation ticket stapled on the shipped dmg"
+
+
+  publish-release:
+    # Single serial publisher: one release object, both platforms' assets, created only after
+    # both builds are green. Re-checks the tag (from verify-inputs) is free at publish time —
+    # 404 only, anything else stops.
+    # needs verify-macos-arm64 (#46 split): nothing publishes until the SHIPPED signed bytes have
+    # self-tested in the secret-free verify job. verify needs notarize needs build, so this single
+    # edge transitively gates the whole macOS chain AND adds the signed-bytes test as a hard
+    # precondition. Windows unchanged (unsigned, self-tested in build-windows).
+    needs: [verify-inputs, build-windows, verify-macos-arm64]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write # the ONLY job that writes: gh release create. Scoped here, not workflow-wide.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
+      # #46 finding-1 split: publish must pull ONLY the two shippable artifacts by name, NOT
+      # pattern "*". The split introduced a third artifact — macos-arm64-adhoc-app (the pre-
+      # Developer-ID bundle job 1 self-tests and job 2 consumes) — which is an intermediate, never
+      # a release asset. A wildcard download would merge that loose .app directory into
+      # release-assets/ and gh release create would publish it next to the signed dmg: an unsigned
+      # bundle on the public release page. Each name downloads into release-assets/ (merge-multiple
+      # false is per-name here, so both land flat and `shasum -c` + `release-assets/*` stay valid).
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: macos-arm64-signed-notarised
+          path: release-assets
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: windows-unsigned
+          path: release-assets
+      - name: Final gate — tag still free (404 only), assets present and checksummed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.verify-inputs.outputs.tag }}
+        run: |
+          RC=0
+          gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" --silent >/dev/null 2>&1 || RC=$?
+          if [ "$RC" -eq 0 ]; then
+            echo "::error::tag $TAG appeared during the build — refusing to overwrite"; exit 1; fi
+          OUT="$(gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" 2>&1 || true)"
+          case "$OUT" in
+            *"Not Found"*|*"404"*) echo "tag $TAG still free (404)" ;;
+            *) echo "::error::tag re-check failed, refusing to publish: $OUT"; exit 1 ;;
+          esac
+          ls -la release-assets/
+          [ -s release-assets/dcmQTreePy-arm64.dmg ] || { echo "::error::macOS dmg asset missing"; exit 1; }
+          [ -s release-assets/dcmQTreePy.exe ] || { echo "::error::Windows exe asset missing"; exit 1; }
+          (cd release-assets && shasum -a 256 -c dcmQTreePy-arm64.dmg.sha256 && sha256sum -c dcmQTreePy.exe.sha256)
+      - name: Create GitHub Release with assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.verify-inputs.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --generate-notes \
+            --title "dcmQTreePy $TAG" \
+            release-assets/*
+          gh release view "$TAG" --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
