@@ -2,7 +2,10 @@
 
 Tests that opening a DICOM file and saving it via the app's own save path
 preserves all elements, private block structure, OB/OW bytes, and produces
-byte-identical output for an unmodified file (CT_small.dcm).
+byte-identical output for an unmodified file (CT_small.dcm, explicit VR LE).
+
+Note: the byte-identical test covers explicit-LE sources only (#57: implicit
+sources are converted to explicit LE on save, so they are not byte-identical).
 
 Run offscreen (QT_QPA_PLATFORM=offscreen).
 """
@@ -1498,3 +1501,67 @@ class TestAtomicWrite:
             w._save_dataset_to(target)
             mode = target.stat().st_mode & 0o7777
             assert mode == 0o640, f"permissions changed: {oct(mode)}"
+
+
+class TestTransferSyntaxRule:
+    """issue #57: never write Implicit VR — downstream systems need the VRs.
+    Stuart's ruling 2026-11-01: implicit → explicit LE, big-endian → explicit LE,
+    explicit LE and compressed stay as-is."""
+
+    def test_implicit_source_saves_explicit_le(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        ds = _base()
+        ds.private_block(0x0009, "IMPAC", create=True).add_new(0x10, "LO", "test")
+        _render_base(w, ds)
+        w.current_dataset.ensure_file_meta()
+        w.current_dataset.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+        w.current_dataset.is_implicit_VR = True
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "implicit.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ExplicitVRLittleEndian, (
+                f"implicit source saved as {saved.file_meta.TransferSyntaxUID}"
+            )
+            assert saved.is_implicit_VR is False
+            # private element has its real VR, not UN
+            elem = saved.get(pydicom.tag.Tag(0x0009, 0x0010))
+            assert elem is not None, "private creator missing"
+            assert elem.VR != "UN", f"private element got UN VR: {elem.VR}"
+
+    def test_big_endian_source_saves_explicit_le(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        _render_base(w, _base())
+        w.current_dataset.ensure_file_meta()
+        w.current_dataset.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRBigEndian
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "bigendian.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ExplicitVRLittleEndian
+
+    def test_explicit_le_source_keeps_syntax(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        _render_base(w, _base())
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "explicit.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ExplicitVRLittleEndian
+
+    def test_compressed_source_keeps_syntax(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        ds = _base()
+        _render_base(w, ds)
+        # set TS after render (render may reset file_meta)
+        w.current_dataset.ensure_file_meta()
+        w.current_dataset.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.4.90"
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "compressed.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == "1.2.840.10008.1.2.4.90", "compressed syntax changed"
