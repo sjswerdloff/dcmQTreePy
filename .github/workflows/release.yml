@@ -625,7 +625,7 @@ jobs:
           # Distinguish "not found" (nothing made - delete nothing) from "could not ask" (auth/network
           # - do NOT claim clean). cora's 2nd point: `gh release view >/dev/null 2>&1` collapses both
           # into "absent", so an auth error would wrongly report a clean nothing-to-do. Capture output.
-          VOUT="$(gh release view "$TAG" 2>&1)"; VRC=$?
+          VRC=0; VOUT="$(gh release view "$TAG" 2>&1)" || VRC=$?
           if [ "$VRC" -ne 0 ]; then
             case "$VOUT" in
               *"not found"*|*"Not Found"*|*"404"*)
@@ -647,7 +647,7 @@ jobs:
           # private and checkout ran persist-credentials:false, so an unauthenticated ls-remote returning
           # empty would falsely read as 'gone'. gh release view fails on a deleted release; the git-refs
           # endpoint returns 404 on a deleted tag. Both are authenticated, so an absence is real.
-          RVOUT="$(gh release view "$TAG" 2>&1)"; RVRC=$?
+          RVRC=0; RVOUT="$(gh release view "$TAG" 2>&1)" || RVRC=$?
           if [ "$RVRC" -eq 0 ]; then
             echo "::error::release $TAG still exists after cleanup delete"; CLEAN_OK=0
           else
