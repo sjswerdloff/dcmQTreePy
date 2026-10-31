@@ -1322,6 +1322,7 @@ class TestCoraReproNestedOps:
 
     def test_add_element_under_nested_item(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
         ds = _base()
         item = pydicom.Dataset()
         item.PatientID = "ITEM"
@@ -1353,3 +1354,43 @@ class TestCoraReproNestedOps:
         s = _save(w)
         assert s.OtherPatientIDsSequence[0].PatientID == "NESTEDID", "add-element wrote to wrong dataset"
         assert s.PatientID == "BASE", "root PatientID was overwritten"
+
+    def test_add_refused_on_sequence_header(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        ds = _base()
+        ds.OtherPatientIDsSequence = pydicom.Sequence([pydicom.Dataset()])
+        top = _render_base(w, ds)
+        seq_header = _find_row(top, "(0010, 1002)")
+        assert seq_header is not None
+        w.dcm_tree_widget.setCurrentItem(seq_header)
+        fired = []
+        monkeypatch.setattr(
+            w, "non_native_warning_message",
+            lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
+        )
+        mock_elem = pydicom.DataElement(0x00100020, "LO", None)
+
+        class FakeDialog:
+            current_public_element = mock_elem
+            ui = type("UI", (), {"text_edit_element_value": type("TE", (), {"toPlainText": lambda self: "X"})()})()
+            def __init__(self, *a, **kw): pass
+            def setProperty(self, *a): pass
+            def exec(self): pass
+
+        monkeypatch.setattr(M, "AddPublicElementDialog", FakeDialog)
+        w.on_add_element()
+        assert any("refused" in t.lower() for t in fired), f"no refusal dialog: {fired}"
+        s = _save(w)
+        assert "PatientID" in s, "refused add should not have modified the dataset"
+
+    def test_deleted_row_drops_pending_error(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        top = _render_base(w, _base())
+        row = _find_row(top, "(0020, 0013)")
+        assert row is not None
+        row.setText(2, "bad-value")
+        assert len(w._pending_errors) == 1
+        w.dcm_tree_widget.setCurrentItem(row)
+        w.handle_tree_delete_pressed(None)
+        assert len(w._pending_errors) == 0, "deleted row kept its pending error"

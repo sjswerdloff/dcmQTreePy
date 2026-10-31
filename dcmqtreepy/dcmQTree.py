@@ -790,6 +790,9 @@ class DCMQtreePy(QMainWindow):
         Sequence header → None (an element can't sit directly in a sequence).
         (connor: single function, matching the tree's own rule)
         """
+        # Sequence header (not an item): refuse (cora: element can't sit in a sequence)
+        if item.text(3) == "SQ" and not item.text(2).isdigit():
+            return None
         parent = item.parent()
         if parent is None:
             return self.current_dataset
@@ -804,15 +807,6 @@ class DCMQtreePy(QMainWindow):
                 if seq_elem is not None and seq_elem.VR == "SQ" and 0 <= item_idx < len(seq_elem.value):
                     return seq_elem.value[item_idx]
             return self.current_dataset
-        # Sequence header: refuse (cora: element can't sit in a sequence)
-        try:
-            tag = self._convert_tag_as_string_to_tuple(item.text(0))
-            parent_ds, _, _, _ = self._find_parent_dataset(item)
-            elem = parent_ds.get(pydicom.tag.Tag(tag))
-            if elem is not None and elem.VR == "SQ":
-                return None
-        except (ValueError, TypeError):
-            pass
         # Element row: the dataset that holds this element
         parent_ds, _, _, _ = self._find_parent_dataset(item)
         return parent_ds
@@ -929,6 +923,7 @@ class DCMQtreePy(QMainWindow):
                                 # Delete the creator element itself
                                 try:
                                     del parent_ds[pydicom.tag.Tag(tag)]
+                                    self._pending_errors.pop(id(selected_item), None)
                                 except KeyError:
                                     self.non_native_warning_message(
                                         "Delete failed",
@@ -948,6 +943,7 @@ class DCMQtreePy(QMainWindow):
                         seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
                         if seq_elem is not None and seq_elem.VR == "SQ":
                             del seq_elem.value[item_idx]
+                            self._pending_errors.pop(id(selected_item), None)
                 else:
                     # Deleting a regular element
                     parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
@@ -964,6 +960,7 @@ class DCMQtreePy(QMainWindow):
                             return
                     try:
                         del parent_ds[pydicom.tag.Tag(tag)]
+                        self._pending_errors.pop(id(selected_item), None)
                         # Cyril 2026-11-01: keep empty items — do NOT prune here
                         # Track emptied private blocks for creator prune (cora 13021 #4)
                         # Only track root-level creators — nested items may share names
