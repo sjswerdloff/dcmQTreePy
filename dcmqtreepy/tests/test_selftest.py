@@ -54,6 +54,32 @@ class TestSelftest:
     def test_passes_on_ct_small_offscreen(self, ct_small):
         assert run_selftest(ct_small, "offscreen") == 0
 
+    def test_save_stage_fails_when_save_dataset_to_regression(self, ct_small, tmp_path, monkeypatch):
+        # #55: the release self-test must exercise the APP's real save path, not a copy.
+        # Prove it by breaking _save_dataset_to (drop a top-level element before delegating
+        # to the genuine method) and asserting run_selftest comes back NON-ZERO naming the
+        # save stage. Before #55 the self-test saved through a self-contained pydicom writer
+        # that never called _save_dataset_to, so a regression there shipped undetected.
+        from pydicom.tag import Tag
+
+        import dcmqtreepy.dcmQTree as M
+
+        drop = Tag(0x0020, 0x000D)  # StudyInstanceUID: present in CT_small, not restored by ensure_file_meta
+        real = M.DCMQtreePy._save_dataset_to
+
+        def broken(self, path):
+            if drop in self.current_dataset:
+                del self.current_dataset[drop]
+            return real(self, path)
+
+        monkeypatch.setattr(M.DCMQtreePy, "_save_dataset_to", broken)
+        report = tmp_path / "z55_regression_report.txt"
+        rc = run_selftest(ct_small, "offscreen", report)
+        assert rc == 1, f"broken _save_dataset_to should fail the self-test, got rc={rc}"
+        text = report.read_text(encoding="utf-8")
+        assert "save:" in text and "_save_dataset_to" in text
+        assert text.endswith("exit=1\n")
+
     def test_writes_report_file(self, ct_small, tmp_path):
         report = tmp_path / "sub" / "selftest.txt"
         rc = run_selftest(ct_small, "offscreen", report)
