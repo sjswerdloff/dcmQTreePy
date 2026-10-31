@@ -65,6 +65,25 @@ class TestSelftest:
     def test_missing_file_exits_2(self, tmp_path):
         assert run_selftest(tmp_path / "nope.dcm", "offscreen") == 2
 
+    def test_unreadable_input_writes_report_and_exits_2(self, tmp_path, monkeypatch):
+        # Same branch, forced via monkeypatch so it holds on Windows and as root, where
+        # chmod 000 does not stop a read (cora's #48 review). The point of this whole path
+        # is that CI *notices* — so assert the report exists and names the failure.
+        target = tmp_path / "locked.dcm"
+        target.write_bytes(b"pretend dicom bytes")
+        report = tmp_path / "perm-report.txt"
+
+        def _raise(*_a, **_k):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "read_bytes", _raise)
+        rc = run_selftest(target, "offscreen", report)
+        assert rc == 2
+        assert report.is_file()
+        text = report.read_text(encoding="utf-8")
+        assert "cannot read input" in text
+        assert text.endswith("exit=2\n")
+
     def test_garbage_file_fails_loudly(self, tmp_path):
         junk = tmp_path / "garbage.dcm"
         junk.write_bytes(b"not a dicom file at all, just bytes")
