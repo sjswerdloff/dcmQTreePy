@@ -1042,6 +1042,7 @@ def _base():
     ds = pydicom.Dataset()
     ds.PatientName = "TEST^BASE"
     ds.PatientID = "BASE"
+    ds.InstanceNumber = "1"
     ds.SOPClassUID = "1.2.840.10008.5.1.4.1.1.2"
     ds.SOPInstanceUID = generate_uid()
     return ds
@@ -1216,15 +1217,20 @@ class TestCoraReproNestedOps:
         with tempfile.TemporaryDirectory() as td:
             out = pathlib.Path(td) / "refused.dcm"
             out.write_bytes(b"PRE-EXISTING")
-            ok = w._perform_save(str(out))
-            assert ok is False
+            # set current_list_item so on_file_save works
+            from PySide6.QtWidgets import QListWidgetItem
+            w.current_list_item = QListWidgetItem(str(out))
+            w.on_file_save()
             assert any("refused" in t.lower() for t in fired), f"no refusal dialog: {fired}"
-            assert out.read_bytes() == b"PRE-EXISTING"
+            assert out.read_bytes() == b"PRE-EXISTING", "refused save overwrote the file"
 
     def test_pending_error_blocks_save(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
-        _render_base(w, _base())
-        w._pending_error = ValueError("bad edit")
+        top = _render_base(w, _base())
+        row = _find_row(top, "(0020, 0013)")
+        assert row is not None
+        row.setText(2, "not-a-number")
+        assert w._pending_error is not None, "bad edit did not set _pending_error"
         fired = []
         monkeypatch.setattr(
             w, "non_native_warning_message",
@@ -1232,11 +1238,21 @@ class TestCoraReproNestedOps:
         )
         with tempfile.TemporaryDirectory() as td:
             out = pathlib.Path(td) / "blocked.dcm"
-            ok = w._perform_save(str(out))
-            assert ok is False, "save succeeded despite pending error"
-            assert fired, "no dialog on pending error"
+            from PySide6.QtWidgets import QListWidgetItem
+            w.current_list_item = QListWidgetItem(str(out))
+            w.on_file_save()
+            assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
 
-    def test_add_element_under_nested_item(self, qapp):
+        # Correct the value — save should succeed
+        row.setText(2, "1")
+        assert w._pending_error is None, "corrected edit did not clear _pending_error"
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "fixed.dcm"
+            w.current_list_item = QListWidgetItem(str(out))
+            w.on_file_save()
+            assert out.exists(), "save failed after correcting the value"
+
+    def test_add_element_under_nested_item(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
         ds = _base()
         item = pydicom.Dataset()
@@ -1246,12 +1262,26 @@ class TestCoraReproNestedOps:
         seq_header = _find_row(top, "(0010, 1002)")
         assert seq_header is not None
         item_row = seq_header.child(0)
-        # resolve the item's dataset and write there
-        parent_ds, is_sq, seq_tag, idx = w._find_parent_dataset(item_row)
-        assert is_sq, "item row not resolved as sequence item"
-        seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
-        target_ds = seq_elem.value[idx]
-        target_ds[pydicom.tag.Tag(0x0010, 0x0020)] = pydicom.DataElement(0x00100020, "LO", "NESTEDID")
+        w.dcm_tree_widget.setCurrentItem(item_row)
+
+        # Monkeypatch the dialog to return a PatientID element
+        mock_elem = pydicom.DataElement(0x00100020, "LO", None)
+
+        class FakeDialog:
+            current_public_element = mock_elem
+            ui = type("UI", (), {"text_edit_element_value": type("TE", (), {"toPlainText": lambda self: "NESTEDID"})()})()
+
+            def __init__(self, *a, **kw):
+                pass
+
+            def setProperty(self, *a):
+                pass
+
+            def exec(self):
+                pass
+
+        monkeypatch.setattr(M, "AddPublicElementDialog", FakeDialog)
+        w.on_add_element()
         s = _save(w)
-        assert s.OtherPatientIDsSequence[0].PatientID == "NESTEDID"
+        assert s.OtherPatientIDsSequence[0].PatientID == "NESTEDID", "add-element wrote to wrong dataset"
         assert s.PatientID == "BASE", "root PatientID was overwritten"
