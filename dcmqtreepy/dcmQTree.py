@@ -100,7 +100,7 @@ class DCMQtreePy(QMainWindow):
         self.reverting_list_item = False
         self.current_dataset = Dataset()
         self._pruned_creators: list[tuple] = []  # (creator_tag, dataset_ref) for exact prune
-        self._pending_errors: dict[str, Exception] = {}  # per-tag errors (connor: no single slot)
+        self._pending_errors: dict[int, Exception] = {}  # keyed by id(row) — same tag in root+item are distinct
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         logging.info("Loading Known Private Dictionaries")
@@ -584,7 +584,8 @@ class DCMQtreePy(QMainWindow):
 
     def _save_dataset_to(self, path: Path) -> None:
         if self._pending_errors:
-            raise ValueError(f"Uncorrected edits: {', '.join(self._pending_errors.keys())}")
+            msgs = [str(e) for e in self._pending_errors.values()]
+            raise ValueError("; ".join(msgs))
         # Prune creators emptied this session (cora 13021 #4) — exact tags, re-check at save
         if self._pruned_creators:
             for creator_tag, ds_ref in self._pruned_creators:
@@ -638,6 +639,13 @@ class DCMQtreePy(QMainWindow):
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
                 target_ds = self._resolve_add_target(selected_items[0])
+                if target_ds is None:
+                    self.non_native_warning_message(
+                        "Add refused",
+                        "An element cannot be added directly to a sequence header. Select an item or element row.",
+                        QMessageBox.Ok,
+                    )
+                    return
         target_ds[public_element.tag] = public_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -686,6 +694,13 @@ class DCMQtreePy(QMainWindow):
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
                 target_ds = self._resolve_add_target(selected_items[0])
+                if target_ds is None:
+                    self.non_native_warning_message(
+                        "Add refused",
+                        "An element cannot be added directly to a sequence header. Select an item or element row.",
+                        QMessageBox.Ok,
+                    )
+                    return
         target_ds[private_element.tag] = private_element
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -762,16 +777,17 @@ class DCMQtreePy(QMainWindow):
                 pass
             else:
                 elem.value = new_value
-            # Clear per-tag error on success (cora: correcting a bad edit unblocks save)
-            self._pending_errors.pop(tag_as_string, None)
+            # Clear per-row error on success (cora: correcting a bad edit unblocks save)
+            self._pending_errors.pop(id(item), None)
         except (KeyError, ValueError) as e:
-            self._pending_errors[tag_as_string] = ValueError(f"{tag_as_string}: {e}")
+            self._pending_errors[id(item)] = ValueError(f"{tag_as_string}: {e}")
             pass
         self.has_edits = True
 
     def _resolve_add_target(self, item: QTreeWidgetItem):
         """Return the dataset where new children of this row belong.
         Item row → that item's dataset. Element row → the row's dataset.
+        Sequence header → None (an element can't sit directly in a sequence).
         (connor: single function, matching the tree's own rule)
         """
         parent = item.parent()
@@ -788,6 +804,15 @@ class DCMQtreePy(QMainWindow):
                 if seq_elem is not None and seq_elem.VR == "SQ" and 0 <= item_idx < len(seq_elem.value):
                     return seq_elem.value[item_idx]
             return self.current_dataset
+        # Sequence header: refuse (cora: element can't sit in a sequence)
+        try:
+            tag = self._convert_tag_as_string_to_tuple(item.text(0))
+            parent_ds, _, _, _ = self._find_parent_dataset(item)
+            elem = parent_ds.get(pydicom.tag.Tag(tag))
+            if elem is not None and elem.VR == "SQ":
+                return None
+        except (ValueError, TypeError):
+            pass
         # Element row: the dataset that holds this element
         parent_ds, _, _, _ = self._find_parent_dataset(item)
         return parent_ds

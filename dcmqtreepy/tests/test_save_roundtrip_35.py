@@ -1278,6 +1278,48 @@ class TestCoraReproNestedOps:
             w.on_file_save()
             assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
 
+    def test_root_edit_does_not_clear_nested_error(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        ds = _base()
+        item = pydicom.Dataset()
+        item.InstanceNumber = "5"
+        ds.OtherPatientIDsSequence = pydicom.Sequence([item])
+        top = _render_base(w, ds)
+        # root InstanceNumber = direct child of top
+        root_row = None
+        for i in range(top.childCount()):
+            if top.child(i).text(0) == "(0020, 0013)":
+                root_row = top.child(i)
+                break
+        # nested InstanceNumber = inside the sequence item
+        seq_header = _find_row(top, "(0010, 1002)")
+        nested_row = None
+        if seq_header is not None:
+            for k in range(seq_header.childCount()):
+                child = seq_header.child(k)
+                for j in range(child.childCount()):
+                    if child.child(j).text(0) == "(0020, 0013)":
+                        nested_row = child.child(j)
+                        break
+        assert root_row is not None and nested_row is not None and root_row is not nested_row
+        # bad edit to nested InstanceNumber
+        nested_row.setText(2, "bad-nested")
+        assert len(w._pending_errors) == 1
+        # good edit to root InstanceNumber — must NOT clear the nested error
+        root_row.setText(2, "1")
+        assert len(w._pending_errors) == 1, "root edit cleared nested error (keyed by tag, not row)"
+        fired = []
+        monkeypatch.setattr(
+            w, "non_native_warning_message",
+            lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "stillblocked.dcm"
+            from PySide6.QtWidgets import QListWidgetItem
+            w.current_list_item = QListWidgetItem(str(out))
+            w.on_file_save()
+            assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
+
     def test_add_element_under_nested_item(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
         ds = _base()
