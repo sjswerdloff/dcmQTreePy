@@ -62,3 +62,21 @@ jobs:
         run: |
           uv run --locked python --version
           uv run --locked pytest dcmqtreepy/tests
+
+  # #41: a held PR's skipped gates must NOT show as passing. This job fails when
+  # gates was skipped (the github-reviewed hold), so Gitea reports the run as failed.
+  # When gates runs and passes, this passes too.
+  required-check:
+    needs: [gates]
+    if: always()
+    runs-on: stuart-m3ultra-canary
+    steps:
+      - name: Verify gates ran
+        run: |
+          if [ "${{ needs.gates.result }}" = "success" ]; then
+            echo "gates passed"
+            exit 0
+          else
+            echo "gates did not pass: ${{ needs.gates.result }}"
+            exit 1
+          fi
