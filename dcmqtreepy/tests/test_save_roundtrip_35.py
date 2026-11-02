@@ -1349,7 +1349,7 @@ class TestCoraReproNestedOps:
         monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
         ds = _base()
         item = pydicom.Dataset()
-        item.PatientID = "ITEM"
+        item.IssuerOfPatientID = "ITEM"  # PatientID absent from the item: adding never replaces (#87)
         ds.OtherPatientIDsSequence = pydicom.Sequence([item])
         top = _render_base(w, ds)
         seq_header = _find_row(top, "(0010, 1002)")

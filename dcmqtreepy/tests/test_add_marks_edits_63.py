@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 import dcmqtreepy.dcmQTree as M  # noqa: E402
 
-DESCRIPTION = pydicom.tag.Tag(0x00081030)  # StudyDescription: absent from CT_small
+DESCRIPTION = pydicom.tag.Tag(0x0008103E)  # SeriesDescription: absent from CT_small (StudyDescription is present)
 PRIVATE_GROUP = 0x0071  # not used by CT_small, so nothing existing is overwritten
 PRIVATE_CREATOR = "TRIAGE 63"
 
@@ -171,8 +171,12 @@ def test_private_creator_slot_reuses_finds_free_and_refuses_when_full() -> None:
     ds = pydicom.Dataset()
     ds.add_new((PRIVATE_GROUP, 0x0010), "LO", "OTHER VENDOR")
     assert M.DCMQtreePy._private_creator_slot(ds, PRIVATE_GROUP, "OTHER VENDOR") == 0x10
+    before = len(ds)
     assert M.DCMQtreePy._private_creator_slot(ds, PRIVATE_GROUP, PRIVATE_CREATOR) == 0x11
-    assert ds[PRIVATE_GROUP, 0x0011].value == PRIVATE_CREATOR
+    assert len(ds) == before, "finding a slot must not write anything (#87)"
+    # members with no creator still occupy their slot (#87)
+    ds.add_new((PRIVATE_GROUP, 0x1101), "LO", "ORPHAN")
+    assert M.DCMQtreePy._private_creator_slot(ds, PRIVATE_GROUP, PRIVATE_CREATOR) == 0x12
     for slot in range(0x12, 0x100):
         ds.add_new((PRIVATE_GROUP, slot), "LO", f"FILLER {slot:02X}")
     before = len(ds)

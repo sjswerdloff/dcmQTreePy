@@ -902,6 +902,9 @@ class DCMQtreePy(QMainWindow):
                         QMessageBox.Ok,
                     )
                     return
+        if public_element.tag in target_ds:
+            self._refuse_occupied_tag(public_element.tag)
+            return
         target_ds[public_element.tag] = public_element
         self._note_value_length(target_ds, public_element.tag)
         # The dataset changed, whatever was selected (#63).
@@ -981,8 +984,14 @@ class DCMQtreePy(QMainWindow):
                 QMessageBox.Ok,
             )
             return
-        creator_element = target_ds[pydicom.tag.Tag(block.group, slot)]
         member_tag = pydicom.tag.Tag(block.group, (slot << 8) | add_element_dialog.current_byte_offset)
+        if member_tag in target_ds:
+            self._refuse_occupied_tag(member_tag)
+            return
+        creator_tag = pydicom.tag.Tag(block.group, slot)
+        if creator_tag not in target_ds:
+            target_ds.add_new(creator_tag, "LO", block.private_creator)
+        creator_element = target_ds[creator_tag]
         target_ds.add_new(member_tag, private_element.VR, private_element.value)
         self._note_value_length(target_ds, member_tag)
         member_element = target_ds[member_tag]
@@ -999,23 +1008,32 @@ class DCMQtreePy(QMainWindow):
             self._populate_tree_widget_item_from_element(parent, member_element)
             parent.sortChildren(0, Qt.AscendingOrder)
 
+    def _refuse_occupied_tag(self, tag) -> None:
+        """Adding never replaces an element: the existing value is kept and the user is told to edit it (#87)."""
+        self.non_native_warning_message(
+            "Add refused",
+            f"{pydicom.tag.Tag(tag)} already exists here. Edit its value in the tree instead; adding never replaces it.",
+            QMessageBox.Ok,
+        )
+
     @staticmethod
     def _private_creator_slot(ds: pydicom.Dataset, group: int, creator: str) -> int | None:
-        """The element byte (0x10-0xFF) of creator's block in ds, reserving the first free slot if it has none.
+        """The element byte (0x10-0xFF) of creator's block in ds, or of the first free slot if it has none. Writes nothing.
 
-        Returns None if all 240 slots hold other creators. pydicom's Dataset.private_block() is not used: in pydicom
+        A slot is free only if it has no creator AND no members: members with no creator (an orphaned block) still
+        occupy it, so a new creator never adopts them (#87). Returns None if no slot is free. The caller adds the
+        creator element once it has checked the member tag. pydicom's Dataset.private_block() is not used: in pydicom
         2.4.5 its cached block makes deepcopy of a dataset read from file recurse without end, and save deep-copies.
         """
+        member_blocks = {tag.element >> 8 for tag in ds.keys() if tag.group == group and tag.element >= 0x1000}
         free = None
         for slot in range(0x10, 0x100):
             elem = ds.get(pydicom.tag.Tag(group, slot))
             if elem is None:
-                if free is None:
+                if free is None and slot not in member_blocks:
                     free = slot
             elif elem.value == creator:
                 return slot
-        if free is not None:
-            ds.add_new((group, free), "LO", creator)
         return free
 
     @Slot()
