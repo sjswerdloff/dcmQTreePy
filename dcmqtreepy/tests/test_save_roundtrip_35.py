@@ -1246,6 +1246,9 @@ class TestCoraReproNestedOps:
             w.current_list_item = QListWidgetItem(str(out))
             w.on_file_save()
             assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
+            # The refusal must also stop the write (#62 finding 10): a dialog alone is not a refusal
+            assert not out.exists(), "refused save wrote the file"
+            assert not list(pathlib.Path(td).glob("*.tmp")), "refused save left a temp file"
 
         # Correct the value — save should succeed
         row.setText(2, "1")
@@ -1283,6 +1286,9 @@ class TestCoraReproNestedOps:
             w.current_list_item = QListWidgetItem(str(out))
             w.on_file_save()
             assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
+            # The refusal must also stop the write (#62 finding 10): a dialog alone is not a refusal
+            assert not out.exists(), "refused save wrote the file"
+            assert not list(pathlib.Path(td).glob("*.tmp")), "refused save left a temp file"
 
     def test_root_edit_does_not_clear_nested_error(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
@@ -1327,6 +1333,9 @@ class TestCoraReproNestedOps:
             w.current_list_item = QListWidgetItem(str(out))
             w.on_file_save()
             assert any("refused" in t.lower() or "save" in t.lower() for t in fired), f"no dialog: {fired}"
+            # The refusal must also stop the write (#62 finding 10): a dialog alone is not a refusal
+            assert not out.exists(), "refused save wrote the file"
+            assert not list(pathlib.Path(td).glob("*.tmp")), "refused save left a temp file"
 
     def test_add_element_under_nested_item(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
