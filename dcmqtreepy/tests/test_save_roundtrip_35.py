@@ -1652,8 +1652,9 @@ class TestTransferSyntaxRule:
             expected = "\\".join(large_values)
             assert saved_vals[0].rstrip("\\ ") == expected, "ContourData values changed"
 
-    def test_large_contour_with_private_warns_and_stays_implicit(self, qapp, monkeypatch):
-        """Real RTSS with large ContourData + private element: warn, keep implicit."""
+    def test_large_contour_with_private_stays_implicit_without_warning(self, qapp, monkeypatch):
+        """Real RTSS with large ContourData + private element: kept implicit by default, and the private-elements
+        warning is gone; the user's choice in the save handler replaces it (#79)."""
         w = M.DCMQtreePy()
         fired = []
         monkeypatch.setattr(
@@ -1688,7 +1689,7 @@ class TestTransferSyntaxRule:
             w._save_dataset_to(out)
             saved = pydicom.dcmread(out, force=True)
             assert saved.is_implicit_VR is True
-            assert any("warning" in t.lower() for t in fired), f"no warning: {fired}"
+            assert not fired, f"unexpected dialog: {fired}"
 
     def test_large_contour_without_private_no_warning(self, qapp, monkeypatch):
         """Real RTSS with large ContourData, no private elements: keep implicit, no warning."""

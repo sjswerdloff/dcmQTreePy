@@ -6,6 +6,7 @@ import sys
 import tempfile
 from copy import deepcopy
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 
 import platformdirs
@@ -17,6 +18,10 @@ from dcm_mini_viewer.config.preferences_manager import (
 )
 from dcm_mini_viewer.main import MainWindow as DcmMiniViewer
 from pydicom import DataElement, Dataset, Sequence, dcmread, dcmwrite
+from pydicom.datadict import dictionary_VR
+from pydicom.dataelem import RawDataElement
+from pydicom.multival import MultiValue
+from pydicom.tag import BaseTag
 from pydicom.valuerep import VR
 from pynetdicom.presentation import build_context
 
@@ -46,6 +51,109 @@ from dcmqtreepy.new_privates import new_private_dictionaries
 from dcmqtreepy.qt_assistant_launcher import HelpAssistant
 
 logger = logging.getLogger(__name__)
+
+# VRs whose Explicit VR encoding has a 16-bit Value Length field (PS3.5 7.1.2). A value of one of these longer than
+# 0xFFFE cannot be written in Explicit VR except as UN (PS3.5 6.2.2, CP-1066) (#79).
+SHORT_LENGTH_VRS = frozenset(
+    {
+        "AE",
+        "AS",
+        "AT",
+        "CS",
+        "DA",
+        "DS",
+        "DT",
+        "FL",
+        "FD",
+        "IS",
+        "LO",
+        "LT",
+        "PN",
+        "SH",
+        "SL",
+        "SS",
+        "ST",
+        "TM",
+        "UI",
+        "UL",
+        "US",
+    }
+)
+MAX_SHORT_VALUE_LENGTH = 0xFFFE
+_BINARY_NUMBER_SIZES = {"AT": 4, "FL": 4, "FD": 8, "SL": 4, "SS": 2, "UL": 4, "US": 2}
+
+
+class OversizedChoice(Enum):
+    """How to save an Implicit VR source holding a value too long for Explicit VR (#79)."""
+
+    KEEP_IMPLICIT = "keep_implicit"
+    EXPLICIT_WITH_UN = "explicit_with_un"
+
+
+def _element_vr(tag: BaseTag, elem) -> str | None:
+    """The element's VR, from the dictionary when an Implicit VR raw element carries none."""
+    if elem.VR:
+        return str(elem.VR)
+    if tag.is_private:
+        return None
+    try:
+        return dictionary_VR(tag)
+    except KeyError:
+        return None
+
+
+def encoded_value_length(elem: DataElement) -> int:
+    """The length of elem's value as encoded, without encoding it (#79).
+
+    Only the VRs in SHORT_LENGTH_VRS are measured; any other VR returns 0. Text values are measured by their
+    backslash-joined form, padded to even length; binary numbers by count times size.
+    """
+    vr = str(elem.VR)
+    if vr not in SHORT_LENGTH_VRS or elem.value is None:
+        return 0
+    values = list(elem.value) if isinstance(elem.value, (list, tuple, MultiValue)) else [elem.value]
+    if vr in _BINARY_NUMBER_SIZES:
+        return len(values) * _BINARY_NUMBER_SIZES[vr]
+    text = "\\".join(getattr(v, "original_string", None) or str(v) for v in values)
+    length = len(text.encode("utf-8", errors="replace"))
+    return length + (length % 2)
+
+
+def find_oversized_elements(ds: Dataset) -> list[tuple[Dataset, BaseTag]]:
+    """Every element, at any depth, whose VR has a 16-bit length field and whose value is longer than 0xFFFE (#79).
+
+    Raw elements are measured by their recorded length, so their values are not converted; that is what makes this
+    cheap enough to run on every load (108 ms against 11.6 s for converting, on a 58.5 MB RT Structure Set).
+    Sequences are parsed to reach their items. Returns (dataset holding the element, tag) pairs.
+    """
+    found: list[tuple[Dataset, BaseTag]] = []
+    for tag in list(ds.keys()):
+        elem = ds.get_item(tag)
+        vr = _element_vr(tag, elem)
+        if vr == "SQ" or (vr is None and isinstance(elem, RawDataElement) and elem.length == 0xFFFFFFFF):
+            for item in ds[tag].value:
+                found.extend(find_oversized_elements(item))
+        elif vr in SHORT_LENGTH_VRS:
+            length = elem.length if isinstance(elem, RawDataElement) else encoded_value_length(elem)
+            if length > MAX_SHORT_VALUE_LENGTH:
+                found.append((ds, BaseTag(tag)))
+    return found
+
+
+def choose_transfer_syntax(
+    source_ts: str | None, has_oversized: bool, choice: OversizedChoice = OversizedChoice.KEEP_IMPLICIT
+) -> tuple[str, bool]:
+    """The (TransferSyntaxUID, is_implicit_VR) to save with (#57, #79).
+
+    Implicit VR LE (or no syntax recorded) becomes Explicit VR LE, so the file carries its VRs, unless a value is too
+    long for Explicit VR: then the choice decides. Every other source syntax is kept: converting big endian corrupts
+    pixel bytes, and Explicit VR LE and encapsulated syntaxes already carry VRs.
+    """
+    if not source_ts or source_ts == pydicom.uid.ImplicitVRLittleEndian:
+        if has_oversized and choice is OversizedChoice.KEEP_IMPLICIT:
+            return pydicom.uid.ImplicitVRLittleEndian, True
+        return pydicom.uid.ExplicitVRLittleEndian, False
+    return source_ts, False
 
 
 def resource_path(relative_path):
@@ -109,6 +217,8 @@ class DCMQtreePy(QMainWindow):
         self.current_dataset = Dataset()
         self._pruned_creators: list[tuple] = []  # (creator_tag, dataset_ref) for exact prune
         self._pending_errors: dict[int, Exception] = {}  # keyed by id(row) — same tag in root+item are distinct
+        # Values too long for Explicit VR: (dataset holding the element, tag), recorded at load from raw lengths (#79)
+        self._oversized: list[tuple[Dataset, BaseTag]] = []
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         logging.info("Loading Known Private Dictionaries")
@@ -517,6 +627,8 @@ class DCMQtreePy(QMainWindow):
             path = Path(file_name)
             self.previous_path = path.parent
             ds = dcmread(path, force=True)
+            # Before the tree build converts every value, while raw lengths are still free to read (#79)
+            self._oversized = find_oversized_elements(ds)
             # ds.remove_private_tags() # temporarily, until save as is working.
             self.current_dataset = ds
             self._pending_errors.clear()  # clear per-file (cora 13021 #8)
@@ -570,8 +682,16 @@ class DCMQtreePy(QMainWindow):
                         QMessageBox.Ok,
                     )
                     return False
+        choice = OversizedChoice.KEEP_IMPLICIT
+        if not self._pending_errors and self._source_is_implicit():
+            oversized = self._current_oversized()
+            if oversized:
+                asked = self._ask_oversized_choice(oversized)
+                if asked is None:
+                    return False
+                choice = asked
         try:
-            self._save_dataset_to(Path(path))
+            self._save_dataset_to(Path(path), choice)
         except ValueError as e:
             self.non_native_warning_message("Save refused", str(e), QMessageBox.Ok)
             return False
@@ -593,7 +713,7 @@ class DCMQtreePy(QMainWindow):
             ghosts.extend(self._find_ghost_rows(item.child(i)))
         return ghosts
 
-    def _save_dataset_to(self, path: Path) -> None:
+    def _save_dataset_to(self, path: Path, oversized_choice: OversizedChoice = OversizedChoice.KEEP_IMPLICIT) -> None:
         if self._pending_errors:
             msgs = [str(e) for e in self._pending_errors.values()]
             raise ValueError("; ".join(msgs))
@@ -615,33 +735,15 @@ class DCMQtreePy(QMainWindow):
         # anything it cannot represent (private elements, OB/OW bytes) must survive.
         modified_ds = deepcopy(self.current_dataset)
         modified_ds.ensure_file_meta()
-        # Transfer syntax rule (Stuart 2026-11-01/02, issue #57): downstream systems
-        # are the customer of the output — saved files must carry their VRs.
-        #   Implicit VR LE  → Explicit VR LE, EXCEPT when ContourData (3006,0050) or
-        #     CompensatorThicknessData (300A,00EC) exceeds 64KB: keep Implicit VR LE
-        #     (pydicom 2.4.5 rewrites large DS as UN under explicit, silently corrupting).
-        #     If private elements are also present, warn (informational, no choice):
-        #     implicit means downstream consumers need those private VRs.
-        #   Explicit VR BE  → keep as-is (converting corrupts pixel bytes)
-        #   Explicit VR LE and compressed/encapsulated → keep (already carry VRs)
+        # Transfer syntax (#57, #79): downstream systems need the VRs, so Implicit VR LE becomes Explicit VR LE, unless a
+        # value is too long for Explicit VR; then the user's choice decides. Other source syntaxes are kept.
         ts = modified_ds.file_meta.get("TransferSyntaxUID") if modified_ds.file_meta else None
-        if not ts or ts == pydicom.uid.ImplicitVRLittleEndian:
-            has_large_ds = self._has_oversized_ds(modified_ds)
-            has_private = self._has_private_elements(modified_ds)
-            if has_large_ds and has_private:
-                self.non_native_warning_message(
-                    "Save warning",
-                    "Large DS element (>64KB) and private elements present. "
-                    "Saving as Implicit VR LE to avoid corrupting the DS data. "
-                    "Downstream consumers will need the private dictionary.",
-                    QMessageBox.Ok,
-                )
-            if not has_large_ds:
-                modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
-                modified_ds.is_implicit_VR = False
-            # else: keep Implicit VR LE
-        else:
-            modified_ds.is_implicit_VR = False  # explicit BE and LE carry VRs
+        has_oversized = self._source_is_implicit() and bool(self._current_oversized())
+        new_ts, is_implicit = choose_transfer_syntax(ts, has_oversized, oversized_choice)
+        modified_ds.file_meta.TransferSyntaxUID = new_ts
+        modified_ds.is_implicit_VR = is_implicit
+        if new_ts in (pydicom.uid.ImplicitVRLittleEndian, pydicom.uid.ExplicitVRLittleEndian):
+            modified_ds.is_little_endian = True
         # Atomic write: temp in same directory, fsync, os.replace (issue #43)
         tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         tmp_path = Path(tmp_name)
@@ -670,48 +772,77 @@ class DCMQtreePy(QMainWindow):
             tmp_path.unlink(missing_ok=True)
             raise
 
-    @staticmethod
-    def _has_private_elements(ds) -> bool:
-        """Check for private elements anywhere in the dataset tree."""
-        for k in list(ds.keys()):
-            if k.group % 2 == 1:
-                return True
-            e = ds[k]
-            if getattr(e, "VR", None) == "SQ":
-                for item in e.value:
-                    if DCMQtreePy._has_private_elements(item):
-                        return True
-        return False
+    def _source_is_implicit(self) -> bool:
+        """Whether the loaded file is Implicit VR LE, or records no transfer syntax."""
+        meta = getattr(self.current_dataset, "file_meta", None)
+        ts = meta.get("TransferSyntaxUID") if meta else None
+        return not ts or ts == pydicom.uid.ImplicitVRLittleEndian
+
+    def _note_value_length(self, ds: Dataset, tag) -> None:
+        """Record an edited or added element if its value is now too long for Explicit VR (#79)."""
+        tag = BaseTag(pydicom.tag.Tag(tag))
+        if tag in ds and encoded_value_length(ds[tag]) > MAX_SHORT_VALUE_LENGTH:
+            if not any(d is ds and t == tag for d, t in self._oversized):
+                self._oversized.append((ds, tag))
 
     @staticmethod
-    def _has_oversized_ds(ds) -> bool:
-        """Check if ContourData (3006,0050) or CompensatorThicknessData (300A,00EC)
-        exceeds 64KB anywhere in the dataset tree (they sit inside sequences).
-        Stuart 2026-11-02: only these two are known to overflow."""
-        for tag in (pydicom.tag.Tag("ContourData"), pydicom.tag.Tag("CompensatorThicknessData")):
-            if DCMQtreePy._find_oversized_ds_in(ds, tag):
-                return True
-        return False
+    def _reachable_datasets(ds: Dataset) -> set[int]:
+        """ids of ds and every sequence item under it. Only sequences are opened; other values are not converted."""
+        ids = {id(ds)}
+        for tag in list(ds.keys()):
+            elem = ds.get_item(tag)
+            vr = _element_vr(tag, elem)
+            if vr == "SQ" or (vr is None and isinstance(elem, RawDataElement) and elem.length == 0xFFFFFFFF):
+                for item in ds[tag].value:
+                    ids |= DCMQtreePy._reachable_datasets(item)
+        return ids
 
-    @staticmethod
-    def _find_oversized_ds_in(ds, tag) -> bool:
-        elem = ds.get(tag)
-        if elem is not None and getattr(elem, "VR", None) == "DS":
-            val = elem.value
-            if isinstance(val, (list, tuple)):
-                total = sum(len(str(v)) for v in val) + len(val)
-            else:
-                total = len(str(val))
-            if total > 65534:
-                return True
-        # recurse into sequences (access via keys to force-parse raw elements)
-        for k in list(ds.keys()):
-            e = ds[k]
-            if getattr(e, "VR", None) == "SQ":
-                for item in e.value:
-                    if DCMQtreePy._find_oversized_ds_in(item, tag):
-                        return True
-        return False
+    def _current_oversized(self) -> list[tuple[Dataset, BaseTag]]:
+        """The recorded elements still in the dataset and still too long for Explicit VR (#79).
+
+        An element in a deleted sequence item is no longer reachable, and an edit may have shortened a value, so only
+        the recorded elements are re-measured; nothing else is walked except the sequence structure.
+        """
+        if not self._oversized:
+            return []
+        reachable = self._reachable_datasets(self.current_dataset)
+        return [
+            (d, t)
+            for d, t in self._oversized
+            if id(d) in reachable and t in d and encoded_value_length(d[t]) > MAX_SHORT_VALUE_LENGTH
+        ]
+
+    def _ask_oversized_choice(self, oversized: list[tuple[Dataset, BaseTag]]) -> OversizedChoice | None:
+        """Ask how to save values too long for Explicit VR. None means cancel: nothing is written (#79)."""
+        names = sorted({f"{t} {pydicom.datadict.keyword_for_tag(t) or 'private'}" for _, t in oversized})
+        app = QApplication.instance()
+        app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Question)
+        dlg.setWindowTitle("Values too long for Explicit VR")
+        dlg.setText(
+            f"{len(oversized)} value(s) are longer than 65534 bytes, the most Explicit VR can hold for their VR: "
+            + ", ".join(names)
+        )
+        dlg.setInformativeText(
+            "Keep Implicit VR (default): the file carries no VRs. Private VRs then depend on the reader's dictionary, "
+            "and the file cannot be compressed or exported to media.\n\n"
+            "Explicit VR with UN: every other element keeps its VR. The listed elements are written as UN "
+            "(PS3.5 6.2.2), so a reader must know their VR to decode them; pydicom 2.4.5, and so this application, "
+            "reads them back as raw bytes."
+        )
+        keep = dlg.addButton("Keep Implicit VR", QMessageBox.ButtonRole.AcceptRole)
+        explicit_un = dlg.addButton("Explicit VR with UN", QMessageBox.ButtonRole.AcceptRole)
+        dlg.addButton(QMessageBox.StandardButton.Cancel)
+        dlg.setDefaultButton(keep)
+        dlg.setProperty("help_id", "warnings")
+        dlg.exec()
+        clicked = dlg.clickedButton()
+        if clicked is keep:
+            return OversizedChoice.KEEP_IMPLICIT
+        if clicked is explicit_un:
+            return OversizedChoice.EXPLICIT_WITH_UN
+        return None
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
@@ -751,6 +882,7 @@ class DCMQtreePy(QMainWindow):
                     )
                     return
         target_ds[public_element.tag] = public_element
+        self._note_value_length(target_ds, public_element.tag)
         # The dataset changed, whatever was selected (#63).
         self.has_edits = True
         parent = self._add_parent_row()
@@ -831,6 +963,7 @@ class DCMQtreePy(QMainWindow):
         creator_element = target_ds[pydicom.tag.Tag(block.group, slot)]
         member_tag = pydicom.tag.Tag(block.group, (slot << 8) | add_element_dialog.current_byte_offset)
         target_ds.add_new(member_tag, private_element.VR, private_element.value)
+        self._note_value_length(target_ds, member_tag)
         member_element = target_ds[member_tag]
         # The dataset changed, whatever was selected (#63).
         self.has_edits = True
@@ -913,6 +1046,7 @@ class DCMQtreePy(QMainWindow):
                 pass
             else:
                 elem.value = new_value
+            self._note_value_length(parent_ds, tag)
             # Clear per-row error on success (cora: correcting a bad edit unblocks save)
             self._pending_errors.pop(id(item), None)
         except (KeyError, ValueError) as e:
