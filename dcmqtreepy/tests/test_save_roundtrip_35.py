@@ -1512,7 +1512,8 @@ class TestTransferSyntaxRule:
         w = M.DCMQtreePy()
         monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
         ds = _base()
-        ds.private_block(0x0009, "IMPAC", create=True).add_new(0x10, "LO", "test-value")
+        # use a private element from pydicom's dictionary (creator 1.2.840.113681, VR=ST)
+        ds.private_block(0x0019, "1.2.840.113681", create=True).add_new(0x10, "ST", "test-value")
         with tempfile.TemporaryDirectory() as td:
             # write as implicit VR LE to disk
             src = pathlib.Path(td) / "implicit-src.dcm"
@@ -1531,9 +1532,10 @@ class TestTransferSyntaxRule:
             )
             assert saved.is_implicit_VR is False
             # value round-trips
-            elem = saved.get(pydicom.tag.Tag(0x0009, 0x1010))
+            elem = saved.get(pydicom.tag.Tag(0x0019, 0x1010))
             assert elem is not None, "private member missing"
             assert elem.value in ("test-value", b"test-value"), f"value lost: {elem.value}"
+            assert elem.VR != "UN", f"private VR lost: got {elem.VR}"
 
     def test_big_endian_source_keeps_syntax(self, qapp, monkeypatch):
         """Stuart 2026-11-02: keep Explicit VR Big Endian as it comes in.
@@ -1572,6 +1574,7 @@ class TestTransferSyntaxRule:
 
         src = get_testdata_file("JPEG2000.dcm")
         assert src is not None, "JPEG2000.dcm test file not found"
+        original = pydicom.dcmread(src, force=True)
         with tempfile.TemporaryDirectory() as td:
             w.populate_tree_widget_from_file(str(src))
             out = pathlib.Path(td) / "compressed.dcm"
@@ -1581,6 +1584,8 @@ class TestTransferSyntaxRule:
                 f"compressed syntax changed: {saved.file_meta.TransferSyntaxUID}"
             )
             assert hasattr(saved, "PixelData"), "pixel data lost"
+            # compare raw bytes (pixel_array decode fails on this file in pydicom 2.4.5)
+            assert bytes(saved.PixelData) == bytes(original.PixelData), "pixel data corrupted by save"
 
     def test_large_contour_data_stays_implicit(self, qapp, monkeypatch):
         """Real RTSS structure (rtstruct.dcm) with ContourData inflated over 64KB:
