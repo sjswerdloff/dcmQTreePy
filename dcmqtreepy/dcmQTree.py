@@ -870,7 +870,8 @@ class DCMQtreePy(QMainWindow):
             owner_ds = self._find_sequence_owner(parent)
             seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
             if seq_elem is not None and seq_elem.VR == "SQ":
-                item_idx = int(item.text(2)) - 1
+                # The item's position under its header, never its displayed number, which a delete leaves stale (#65).
+                item_idx = parent.indexOfChild(item)
                 return owner_ds, True, seq_tag, item_idx
             return self.current_dataset, False, None, None
         # Climb through nested sequence items recursively
@@ -887,7 +888,7 @@ class DCMQtreePy(QMainWindow):
                 owner_ds = self._find_sequence_owner(current_parent)
                 seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
                 if seq_elem is not None and seq_elem.VR == "SQ":
-                    item_idx = int(current.text(2)) - 1
+                    item_idx = current_parent.indexOfChild(current)  # position, not displayed number (#65)
                     if 0 <= item_idx < len(seq_elem.value):
                         return seq_elem.value[item_idx], True, seq_tag, item_idx
                 return self.current_dataset, False, None, None
@@ -918,7 +919,7 @@ class DCMQtreePy(QMainWindow):
                 owner = self._find_sequence_owner(current_parent)
                 seq_elem = owner.get(pydicom.tag.Tag(seq_tag))
                 if seq_elem is not None and seq_elem.VR == "SQ":
-                    item_idx = int(current.text(2)) - 1
+                    item_idx = current_parent.indexOfChild(current)  # position, not displayed number (#65)
                     if 0 <= item_idx < len(seq_elem.value):
                         return seq_elem.value[item_idx]
                 return self.current_dataset
@@ -1026,7 +1027,22 @@ class DCMQtreePy(QMainWindow):
                         )
                         return
                 parent.takeChild(child_index)
+                if is_seq_item:
+                    self._renumber_item_rows(parent)
                 self.has_edits = True
+
+    def _renumber_item_rows(self, header: QTreeWidgetItem) -> None:
+        """Show each remaining item under a sequence header with its 1-based position (#65).
+
+        Resolution already uses the row's position, so this is what the user reads. Signals are blocked so the
+        rewrite is not taken as an edit.
+        """
+        blocked = self.dcm_tree_widget.blockSignals(True)
+        try:
+            for i in range(header.childCount()):
+                header.child(i).setText(2, str(i + 1))
+        finally:
+            self.dcm_tree_widget.blockSignals(blocked)
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyPress and event.key() == Qt.Key.Key_F1:
