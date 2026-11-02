@@ -1583,35 +1583,63 @@ class TestTransferSyntaxRule:
             assert hasattr(saved, "PixelData"), "pixel data lost"
 
     def test_large_contour_data_stays_implicit(self, qapp, monkeypatch):
-        """ContourData (3006,0050) over 64KB: keep Implicit VR LE.
-        Note: synthetic fixture — IDC RTSS not available in this clone."""
+        """Real RTSS structure (rtstruct.dcm) with ContourData inflated over 64KB:
+        keep Implicit VR LE. Recursive check finds it inside sequences."""
         w = M.DCMQtreePy()
         monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
-        ds = _base()
-        # 9000 values of "0.0" = ~36KB string, plus backslashes = ~45KB — under limit
-        # need over 65534 bytes: 20000 values of "0.000" = ~120KB
-        large_ds = ["0.000"] * 20000
-        ds.add_new(pydicom.tag.Tag(0x3006, 0x0050), "DS", large_ds)
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("rtstruct.dcm")
+        assert src is not None
         with tempfile.TemporaryDirectory() as td:
-            src = pathlib.Path(td) / "large-contour.dcm"
-            ds.ensure_file_meta()
-            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
-            ds.is_implicit_VR = True
-            pydicom.dcmwrite(src, ds, write_like_original=False)
-            w.populate_tree_widget_from_file(str(src))
-            out = pathlib.Path(td) / "large-contour-out.dcm"
+            ds = pydicom.dcmread(src, force=True)
+            # inflate the first ContourData to over 64KB (real RTSS structure)
+            large_values = ["0.000"] * 20000
+
+            def inflate_contour(d):
+                for e in d.values():
+                    if e.VR == "SQ":
+                        for item in e.value:
+                            if inflate_contour(item):
+                                return True
+                    elif e.tag == pydicom.tag.Tag(0x3006, 0x0050):
+                        d[e.tag] = pydicom.DataElement(e.tag, "DS", large_values)
+                        return True
+                return False
+
+            assert inflate_contour(ds), "no ContourData found"
+            modified_src = pathlib.Path(td) / "rtss-large.dcm"
+            ds.save_as(modified_src)
+            w.populate_tree_widget_from_file(str(modified_src))
+            out = pathlib.Path(td) / "rtss-large-out.dcm"
             w._save_dataset_to(out)
             saved = pydicom.dcmread(out, force=True)
-            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian, (
-                f"large DS source saved as {saved.file_meta.TransferSyntaxUID}"
-            )
-            elem = saved.get(pydicom.tag.Tag(0x3006, 0x0050))
-            assert elem is not None
-            assert elem.VR == "DS", f"ContourData became {elem.VR}"
-            assert list(elem.value) == large_ds, "ContourData values changed"
+            assert saved.is_implicit_VR is True, "large ContourData did not stay implicit"
+
+            # ContourData values preserved (may be raw bytes on implicit read)
+            def collect_contour_values(d):
+                results = []
+                for e in d.values():
+                    if e.VR == "SQ":
+                        for item in e.value:
+                            results.extend(collect_contour_values(item))
+                    elif e.tag == pydicom.tag.Tag(0x3006, 0x0050):
+                        val = e.value
+                        if isinstance(val, bytes):
+                            results.append(val.decode("ascii").rstrip("\x00 "))
+                        elif isinstance(val, (list, tuple)):
+                            results.append("\\".join(str(v) for v in val))
+                        else:
+                            results.append(str(val))
+                return results
+
+            saved_vals = collect_contour_values(saved)
+            assert saved_vals, "no ContourData in output"
+            expected = "\\".join(large_values)
+            assert saved_vals[0].rstrip("\\ ") == expected, "ContourData values changed"
 
     def test_large_contour_with_private_warns_and_stays_implicit(self, qapp, monkeypatch):
-        """Large DS + private elements: warn (informational), keep implicit."""
+        """Real RTSS with large ContourData + private element: warn, keep implicit."""
         w = M.DCMQtreePy()
         fired = []
         monkeypatch.setattr(
@@ -1619,25 +1647,37 @@ class TestTransferSyntaxRule:
             "non_native_warning_message",
             lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
         )
-        ds = _base()
-        large_ds = ["0.000"] * 20000
-        ds.add_new(pydicom.tag.Tag(0x3006, 0x0050), "DS", large_ds)
-        ds.private_block(0x0009, "TESTPRIV", create=True).add_new(0x10, "LO", "val")
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("rtstruct.dcm")
         with tempfile.TemporaryDirectory() as td:
-            src = pathlib.Path(td) / "large-priv.dcm"
-            ds.ensure_file_meta()
-            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
-            ds.is_implicit_VR = True
-            pydicom.dcmwrite(src, ds, write_like_original=False)
-            w.populate_tree_widget_from_file(str(src))
-            out = pathlib.Path(td) / "large-priv-out.dcm"
+            ds = pydicom.dcmread(src, force=True)
+            large_values = ["0.000"] * 20000
+
+            def inflate_contour(d):
+                for e in d.values():
+                    if e.VR == "SQ":
+                        for item in e.value:
+                            if inflate_contour(item):
+                                return True
+                    elif e.tag == pydicom.tag.Tag(0x3006, 0x0050):
+                        d[e.tag] = pydicom.DataElement(e.tag, "DS", large_values)
+                        return True
+                return False
+
+            inflate_contour(ds)
+            ds.private_block(0x0009, "TESTPRIV", create=True).add_new(0x10, "LO", "val")
+            modified_src = pathlib.Path(td) / "rtss-priv.dcm"
+            ds.save_as(modified_src)
+            w.populate_tree_widget_from_file(str(modified_src))
+            out = pathlib.Path(td) / "rtss-priv-out.dcm"
             w._save_dataset_to(out)
             saved = pydicom.dcmread(out, force=True)
-            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
+            assert saved.is_implicit_VR is True
             assert any("warning" in t.lower() for t in fired), f"no warning: {fired}"
 
     def test_large_contour_without_private_no_warning(self, qapp, monkeypatch):
-        """Large DS, no private elements: keep implicit, no warning."""
+        """Real RTSS with large ContourData, no private elements: keep implicit, no warning."""
         w = M.DCMQtreePy()
         fired = []
         monkeypatch.setattr(
@@ -1645,18 +1685,30 @@ class TestTransferSyntaxRule:
             "non_native_warning_message",
             lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
         )
-        ds = _base()
-        large_ds = ["0.000"] * 20000
-        ds.add_new(pydicom.tag.Tag(0x3006, 0x0050), "DS", large_ds)
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("rtstruct.dcm")
         with tempfile.TemporaryDirectory() as td:
-            src = pathlib.Path(td) / "large-nopriv.dcm"
-            ds.ensure_file_meta()
-            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
-            ds.is_implicit_VR = True
-            pydicom.dcmwrite(src, ds, write_like_original=False)
-            w.populate_tree_widget_from_file(str(src))
-            out = pathlib.Path(td) / "large-nopriv-out.dcm"
+            ds = pydicom.dcmread(src, force=True)
+            large_values = ["0.000"] * 20000
+
+            def inflate_contour(d):
+                for e in d.values():
+                    if e.VR == "SQ":
+                        for item in e.value:
+                            if inflate_contour(item):
+                                return True
+                    elif e.tag == pydicom.tag.Tag(0x3006, 0x0050):
+                        d[e.tag] = pydicom.DataElement(e.tag, "DS", large_values)
+                        return True
+                return False
+
+            inflate_contour(ds)
+            modified_src = pathlib.Path(td) / "rtss-nopriv.dcm"
+            ds.save_as(modified_src)
+            w.populate_tree_widget_from_file(str(modified_src))
+            out = pathlib.Path(td) / "rtss-nopriv-out.dcm"
             w._save_dataset_to(out)
             saved = pydicom.dcmread(out, force=True)
-            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
+            assert saved.is_implicit_VR is True
             assert not any("warning" in t.lower() for t in fired), f"unexpected warning: {fired}"

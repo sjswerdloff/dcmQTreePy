@@ -621,10 +621,10 @@ class DCMQtreePy(QMainWindow):
         #     implicit means downstream consumers need those private VRs.
         #   Explicit VR BE  → keep as-is (converting corrupts pixel bytes)
         #   Explicit VR LE and compressed/encapsulated → keep (already carry VRs)
-        ts = modified_ds.file_meta.TransferSyntaxUID
+        ts = modified_ds.file_meta.get("TransferSyntaxUID") if modified_ds.file_meta else None
         if not ts or ts == pydicom.uid.ImplicitVRLittleEndian:
             has_large_ds = self._has_oversized_ds(modified_ds)
-            has_private = any(k.group % 2 == 1 for k in modified_ds.keys())
+            has_private = self._has_private_elements(modified_ds)
             if has_large_ds and has_private:
                 self.non_native_warning_message(
                     "Save warning",
@@ -668,19 +668,45 @@ class DCMQtreePy(QMainWindow):
             raise
 
     @staticmethod
+    def _has_private_elements(ds) -> bool:
+        """Check for private elements anywhere in the dataset tree."""
+        for k in ds.keys():
+            if k.group % 2 == 1:
+                return True
+        for e in ds.values():
+            if e.VR == "SQ":
+                for item in e.value:
+                    if DCMQtreePy._has_private_elements(item):
+                        return True
+        return False
+
+    @staticmethod
     def _has_oversized_ds(ds) -> bool:
         """Check if ContourData (3006,0050) or CompensatorThicknessData (300A,00E6)
-        exceeds 64KB (Stuart 2026-11-02: only these two are known to overflow)."""
+        exceeds 64KB anywhere in the dataset tree (they sit inside sequences).
+        Stuart 2026-11-02: only these two are known to overflow."""
         for tag in (pydicom.tag.Tag(0x3006, 0x0050), pydicom.tag.Tag(0x300A, 0x00E6)):
-            elem = ds.get(tag)
-            if elem is not None and elem.VR == "DS":
-                val = elem.value
-                if isinstance(val, (list, tuple)):
-                    total = sum(len(str(v)) for v in val) + len(val)
-                else:
-                    total = len(str(val))
-                if total > 65534:
-                    return True
+            if DCMQtreePy._find_oversized_ds_in(ds, tag):
+                return True
+        return False
+
+    @staticmethod
+    def _find_oversized_ds_in(ds, tag) -> bool:
+        elem = ds.get(tag)
+        if elem is not None and elem.VR == "DS":
+            val = elem.value
+            if isinstance(val, (list, tuple)):
+                total = sum(len(str(v)) for v in val) + len(val)
+            else:
+                total = len(str(val))
+            if total > 65534:
+                return True
+        # recurse into sequences
+        for e in ds.values():
+            if e.VR == "SQ":
+                for item in e.value:
+                    if DCMQtreePy._find_oversized_ds_in(item, tag):
+                        return True
         return False
 
     def on_add_element(self):
