@@ -124,3 +124,57 @@ def test_public_add_with_a_row_selected_still_marks_edits(qapp, monkeypatch) -> 
 
     assert w.has_edits
     assert str(DESCRIPTION) in _root_child_tags(w)
+
+
+def test_private_add_with_no_selection_then_save_writes_creator_and_member(qapp, monkeypatch, tmp_path) -> None:
+    """Cora's case: the creator must be in the dataset, not only in the tree, or the save is refused."""
+    w = _loaded_widget(monkeypatch)
+    monkeypatch.setattr(M, "AddPrivateElementDialog", _FakeAddPrivateDialog)
+
+    w.on_add_private_element()
+    out = tmp_path / "saved.dcm"
+    w._save_dataset_to(out)
+
+    assert not w._pending_errors
+    saved = pydicom.dcmread(out)
+    assert saved[PRIVATE_GROUP, 0x0010].value == PRIVATE_CREATOR
+    assert saved[PRIVATE_GROUP, 0x1001].value == "PRIVATE ADD"
+
+
+def test_private_add_into_a_group_whose_first_slot_is_taken_uses_the_next_slot(qapp, monkeypatch, tmp_path) -> None:
+    """Another creator already holds (0071,0010): the new block goes to slot 0x11, never under the other creator."""
+    ds = pydicom.dcmread(get_testdata_file("CT_small.dcm"))
+    ds.add_new((PRIVATE_GROUP, 0x0010), "LO", "OTHER VENDOR")
+    ds.add_new((PRIVATE_GROUP, 0x1001), "LO", "THEIRS")
+    src = tmp_path / "src.dcm"
+    ds.save_as(src)
+    w = M.DCMQtreePy()
+    monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+    w.populate_tree_widget_from_file(str(src))
+    w.dcm_tree_widget.clearSelection()
+    monkeypatch.setattr(M, "AddPrivateElementDialog", _FakeAddPrivateDialog)
+
+    w.on_add_private_element()
+    out = tmp_path / "saved.dcm"
+    w._save_dataset_to(out)
+
+    saved = pydicom.dcmread(out)
+    assert saved[PRIVATE_GROUP, 0x1001].value == "THEIRS", "the other creator's member was overwritten"
+    assert saved[PRIVATE_GROUP, 0x0011].value == PRIVATE_CREATOR
+    assert saved[PRIVATE_GROUP, 0x1101].value == "PRIVATE ADD"
+    shown = _root_child_tags(w)
+    assert str(pydicom.tag.Tag(PRIVATE_GROUP, 0x0011)) in shown
+    assert str(pydicom.tag.Tag(PRIVATE_GROUP, 0x1101)) in shown
+
+
+def test_private_creator_slot_reuses_finds_free_and_refuses_when_full() -> None:
+    ds = pydicom.Dataset()
+    ds.add_new((PRIVATE_GROUP, 0x0010), "LO", "OTHER VENDOR")
+    assert M.DCMQtreePy._private_creator_slot(ds, PRIVATE_GROUP, "OTHER VENDOR") == 0x10
+    assert M.DCMQtreePy._private_creator_slot(ds, PRIVATE_GROUP, PRIVATE_CREATOR) == 0x11
+    assert ds[PRIVATE_GROUP, 0x0011].value == PRIVATE_CREATOR
+    for slot in range(0x12, 0x100):
+        ds.add_new((PRIVATE_GROUP, slot), "LO", f"FILLER {slot:02X}")
+    before = len(ds)
+    assert M.DCMQtreePy._private_creator_slot(ds, PRIVATE_GROUP, "NO ROOM") is None
+    assert len(ds) == before, "a refused allocation must not write anything"
