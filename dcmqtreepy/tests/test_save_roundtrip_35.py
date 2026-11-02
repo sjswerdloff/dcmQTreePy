@@ -2,7 +2,10 @@
 
 Tests that opening a DICOM file and saving it via the app's own save path
 preserves all elements, private block structure, OB/OW bytes, and produces
-byte-identical output for an unmodified file (CT_small.dcm).
+byte-identical output for an unmodified file (CT_small.dcm, explicit VR LE).
+
+Note: the byte-identical test covers explicit-LE sources only (#57: implicit
+sources are converted to explicit LE on save, so they are not byte-identical).
 
 Run offscreen (QT_QPA_PLATFORM=offscreen).
 """
@@ -1507,3 +1510,253 @@ class TestAtomicWrite:
             w._save_dataset_to(target)
             mode = target.stat().st_mode & 0o7777
             assert mode == 0o640, f"permissions changed: {oct(mode)}"
+
+
+class TestTransferSyntaxRule:
+    """issue #57: never write Implicit VR — downstream systems need the VRs.
+    Stuart's ruling 2026-11-01/02: implicit → explicit LE, big-endian kept as-is,
+    explicit LE and compressed stay as-is."""
+
+    def test_implicit_source_saves_explicit_le(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        ds = _base()
+        # use a private element from pydicom's dictionary (creator 1.2.840.113681, VR=ST)
+        ds.private_block(0x0019, "1.2.840.113681", create=True).add_new(0x10, "ST", "test-value")
+        with tempfile.TemporaryDirectory() as td:
+            # write as implicit VR LE to disk
+            src = pathlib.Path(td) / "implicit-src.dcm"
+            ds.ensure_file_meta()
+            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+            ds.is_implicit_VR = True
+            pydicom.dcmwrite(src, ds, write_like_original=False)
+            # load through the app (implicit read resolves VR from dictionary;
+            # unknown private tags get UN — that's the point of #57)
+            w.populate_tree_widget_from_file(str(src))
+            out = pathlib.Path(td) / "implicit-out.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ExplicitVRLittleEndian, (
+                f"implicit source saved as {saved.file_meta.TransferSyntaxUID}"
+            )
+            assert saved.is_implicit_VR is False
+            # value round-trips
+            elem = saved.get(pydicom.tag.Tag(0x0019, 0x1010))
+            assert elem is not None, "private member missing"
+            assert elem.value in ("test-value", b"test-value"), f"value lost: {elem.value}"
+            assert elem.VR != "UN", f"private VR lost: got {elem.VR}"
+
+    def test_big_endian_source_keeps_syntax(self, qapp, monkeypatch):
+        """Stuart 2026-11-02: keep Explicit VR Big Endian as it comes in.
+        Converting via pydicom 2.4.5 silently corrupts pixel bytes."""
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("MR_small_bigendian.dcm")
+        assert src is not None, "MR_small_bigendian.dcm test file not found"
+        with tempfile.TemporaryDirectory() as td:
+            w.populate_tree_widget_from_file(str(src))
+            out = pathlib.Path(td) / "bigendian.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ExplicitVRBigEndian, (
+                f"big-endian syntax changed: {saved.file_meta.TransferSyntaxUID}"
+            )
+            original = pydicom.dcmread(src, force=True)
+            assert list(saved.pixel_array.flat) == list(original.pixel_array.flat), "pixel data corrupted by save"
+
+    def test_explicit_le_source_keeps_syntax(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        _render_base(w, _base())
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "explicit.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ExplicitVRLittleEndian
+
+    def test_compressed_source_keeps_syntax(self, qapp, monkeypatch):
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("JPEG2000.dcm")
+        assert src is not None, "JPEG2000.dcm test file not found"
+        original = pydicom.dcmread(src, force=True)
+        with tempfile.TemporaryDirectory() as td:
+            w.populate_tree_widget_from_file(str(src))
+            out = pathlib.Path(td) / "compressed.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == "1.2.840.10008.1.2.4.91", (
+                f"compressed syntax changed: {saved.file_meta.TransferSyntaxUID}"
+            )
+            assert hasattr(saved, "PixelData"), "pixel data lost"
+            # compare raw bytes (pixel_array decode fails on this file in pydicom 2.4.5)
+            assert bytes(saved.PixelData) == bytes(original.PixelData), "pixel data corrupted by save"
+
+    def test_large_contour_data_stays_implicit(self, qapp, monkeypatch):
+        """Real RTSS structure (rtstruct.dcm) with ContourData inflated over 64KB:
+        keep Implicit VR LE. Recursive check finds it inside sequences."""
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("rtstruct.dcm")
+        assert src is not None
+        with tempfile.TemporaryDirectory() as td:
+            ds = pydicom.dcmread(src, force=True)
+            # inflate the first ContourData to over 64KB (real RTSS structure)
+            large_values = ["0.000"] * 20000
+
+            def inflate_contour(d):
+                for e in d.values():
+                    if e.VR == "SQ":
+                        for item in e.value:
+                            if inflate_contour(item):
+                                return True
+                    elif e.tag == pydicom.tag.Tag(0x3006, 0x0050):
+                        d[e.tag] = pydicom.DataElement(e.tag, "DS", large_values)
+                        return True
+                return False
+
+            assert inflate_contour(ds), "no ContourData found"
+            modified_src = pathlib.Path(td) / "rtss-large.dcm"
+            ds.save_as(modified_src)
+            w.populate_tree_widget_from_file(str(modified_src))
+            out = pathlib.Path(td) / "rtss-large-out.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.is_implicit_VR is True, "large ContourData did not stay implicit"
+
+            # ContourData values preserved (may be raw bytes on implicit read)
+            def collect_contour_values(d):
+                results = []
+                for e in d.values():
+                    if e.VR == "SQ":
+                        for item in e.value:
+                            results.extend(collect_contour_values(item))
+                    elif e.tag == pydicom.tag.Tag(0x3006, 0x0050):
+                        val = e.value
+                        if isinstance(val, bytes):
+                            results.append(val.decode("ascii").rstrip("\x00 "))
+                        elif isinstance(val, (list, tuple)):
+                            results.append("\\".join(str(v) for v in val))
+                        else:
+                            results.append(str(val))
+                return results
+
+            saved_vals = collect_contour_values(saved)
+            assert saved_vals, "no ContourData in output"
+            expected = "\\".join(large_values)
+            assert saved_vals[0].rstrip("\\ ") == expected, "ContourData values changed"
+
+    def test_large_contour_with_private_warns_and_stays_implicit(self, qapp, monkeypatch):
+        """Real RTSS with large ContourData + private element: warn, keep implicit."""
+        w = M.DCMQtreePy()
+        fired = []
+        monkeypatch.setattr(
+            w,
+            "non_native_warning_message",
+            lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
+        )
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("rtstruct.dcm")
+        with tempfile.TemporaryDirectory() as td:
+            ds = pydicom.dcmread(src, force=True)
+            large_values = ["0.000"] * 20000
+
+            def inflate_contour(d):
+                for e in d.values():
+                    if e.VR == "SQ":
+                        for item in e.value:
+                            if inflate_contour(item):
+                                return True
+                    elif e.tag == pydicom.tag.Tag(0x3006, 0x0050):
+                        d[e.tag] = pydicom.DataElement(e.tag, "DS", large_values)
+                        return True
+                return False
+
+            inflate_contour(ds)
+            ds.private_block(0x0009, "TESTPRIV", create=True).add_new(0x10, "LO", "val")
+            modified_src = pathlib.Path(td) / "rtss-priv.dcm"
+            ds.save_as(modified_src)
+            w.populate_tree_widget_from_file(str(modified_src))
+            out = pathlib.Path(td) / "rtss-priv-out.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.is_implicit_VR is True
+            assert any("warning" in t.lower() for t in fired), f"no warning: {fired}"
+
+    def test_large_contour_without_private_no_warning(self, qapp, monkeypatch):
+        """Real RTSS with large ContourData, no private elements: keep implicit, no warning."""
+        w = M.DCMQtreePy()
+        fired = []
+        monkeypatch.setattr(
+            w,
+            "non_native_warning_message",
+            lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
+        )
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("rtstruct.dcm")
+        with tempfile.TemporaryDirectory() as td:
+            ds = pydicom.dcmread(src, force=True)
+            large_values = ["0.000"] * 20000
+
+            def inflate_contour(d):
+                for e in d.values():
+                    if e.VR == "SQ":
+                        for item in e.value:
+                            if inflate_contour(item):
+                                return True
+                    elif e.tag == pydicom.tag.Tag(0x3006, 0x0050):
+                        d[e.tag] = pydicom.DataElement(e.tag, "DS", large_values)
+                        return True
+                return False
+
+            inflate_contour(ds)
+            modified_src = pathlib.Path(td) / "rtss-nopriv.dcm"
+            ds.save_as(modified_src)
+            w.populate_tree_widget_from_file(str(modified_src))
+            out = pathlib.Path(td) / "rtss-nopriv-out.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.is_implicit_VR is True
+            assert not any("warning" in t.lower() for t in fired), f"unexpected warning: {fired}"
+
+    def test_large_compensator_data_stays_implicit(self, qapp, monkeypatch):
+        """Real Ion Plan (RTPLAN_Compensator.dcm) with CompensatorThicknessData
+        inflated over 64KB: keep Implicit VR LE. Source: IBA phantom (ZZIBA^DEPTHEAD)
+        RT Ion Plan from Stuart's MacBook Pro, sha256 fdc09549..."""
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        data_dir = pathlib.Path(__file__).parent / "data"
+        src = data_dir / "RTPLAN_Compensator.dcm"
+        assert src.exists(), "RTPLAN_Compensator.dcm test data not found"
+        with tempfile.TemporaryDirectory() as td:
+            ds = pydicom.dcmread(src, force=True)
+            large_values = ["0.000"] * 20000
+
+            def inflate_compensator(d):
+                for k in list(d.keys()):
+                    e = d[k]
+                    if getattr(e, "VR", None) == "SQ":
+                        for item in e.value:
+                            if inflate_compensator(item):
+                                return True
+                    elif k == pydicom.tag.Tag("CompensatorThicknessData"):
+                        d[k] = pydicom.DataElement(k, "DS", large_values)
+                        return True
+                return False
+
+            assert inflate_compensator(ds), "no CompensatorThicknessData found"
+            modified_src = pathlib.Path(td) / "ionplan-large.dcm"
+            ds.save_as(modified_src)
+            w.populate_tree_widget_from_file(str(modified_src))
+            out = pathlib.Path(td) / "ionplan-out.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.is_implicit_VR is True, "large CompensatorThicknessData did not stay implicit"

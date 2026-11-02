@@ -615,10 +615,33 @@ class DCMQtreePy(QMainWindow):
         # anything it cannot represent (private elements, OB/OW bytes) must survive.
         modified_ds = deepcopy(self.current_dataset)
         modified_ds.ensure_file_meta()
-        # Keep source transfer syntax (cora 13021 #5) — don't force explicit LE
-        if not modified_ds.file_meta.TransferSyntaxUID:
-            modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
-        modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
+        # Transfer syntax rule (Stuart 2026-11-01/02, issue #57): downstream systems
+        # are the customer of the output — saved files must carry their VRs.
+        #   Implicit VR LE  → Explicit VR LE, EXCEPT when ContourData (3006,0050) or
+        #     CompensatorThicknessData (300A,00EC) exceeds 64KB: keep Implicit VR LE
+        #     (pydicom 2.4.5 rewrites large DS as UN under explicit, silently corrupting).
+        #     If private elements are also present, warn (informational, no choice):
+        #     implicit means downstream consumers need those private VRs.
+        #   Explicit VR BE  → keep as-is (converting corrupts pixel bytes)
+        #   Explicit VR LE and compressed/encapsulated → keep (already carry VRs)
+        ts = modified_ds.file_meta.get("TransferSyntaxUID") if modified_ds.file_meta else None
+        if not ts or ts == pydicom.uid.ImplicitVRLittleEndian:
+            has_large_ds = self._has_oversized_ds(modified_ds)
+            has_private = self._has_private_elements(modified_ds)
+            if has_large_ds and has_private:
+                self.non_native_warning_message(
+                    "Save warning",
+                    "Large DS element (>64KB) and private elements present. "
+                    "Saving as Implicit VR LE to avoid corrupting the DS data. "
+                    "Downstream consumers will need the private dictionary.",
+                    QMessageBox.Ok,
+                )
+            if not has_large_ds:
+                modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
+                modified_ds.is_implicit_VR = False
+            # else: keep Implicit VR LE
+        else:
+            modified_ds.is_implicit_VR = False  # explicit BE and LE carry VRs
         # Atomic write: temp in same directory, fsync, os.replace (issue #43)
         tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         tmp_path = Path(tmp_name)
@@ -646,6 +669,49 @@ class DCMQtreePy(QMainWindow):
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
+
+    @staticmethod
+    def _has_private_elements(ds) -> bool:
+        """Check for private elements anywhere in the dataset tree."""
+        for k in list(ds.keys()):
+            if k.group % 2 == 1:
+                return True
+            e = ds[k]
+            if getattr(e, "VR", None) == "SQ":
+                for item in e.value:
+                    if DCMQtreePy._has_private_elements(item):
+                        return True
+        return False
+
+    @staticmethod
+    def _has_oversized_ds(ds) -> bool:
+        """Check if ContourData (3006,0050) or CompensatorThicknessData (300A,00EC)
+        exceeds 64KB anywhere in the dataset tree (they sit inside sequences).
+        Stuart 2026-11-02: only these two are known to overflow."""
+        for tag in (pydicom.tag.Tag("ContourData"), pydicom.tag.Tag("CompensatorThicknessData")):
+            if DCMQtreePy._find_oversized_ds_in(ds, tag):
+                return True
+        return False
+
+    @staticmethod
+    def _find_oversized_ds_in(ds, tag) -> bool:
+        elem = ds.get(tag)
+        if elem is not None and getattr(elem, "VR", None) == "DS":
+            val = elem.value
+            if isinstance(val, (list, tuple)):
+                total = sum(len(str(v)) for v in val) + len(val)
+            else:
+                total = len(str(val))
+            if total > 65534:
+                return True
+        # recurse into sequences (access via keys to force-parse raw elements)
+        for k in list(ds.keys()):
+            e = ds[k]
+            if getattr(e, "VR", None) == "SQ":
+                for item in e.value:
+                    if DCMQtreePy._find_oversized_ds_in(item, tag):
+                        return True
+        return False
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
