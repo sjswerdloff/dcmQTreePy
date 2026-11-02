@@ -166,3 +166,34 @@ def test_nested_sequence_edit_after_a_nested_item_delete(qapp, monkeypatch) -> N
     inner = w.current_dataset.ReferencedFrameOfReferenceSequence[0].StructureSetROISequence
     assert [i.ROIName for i in inner] == ["ONE", "EDITED", "FOUR"]
     assert not w._pending_errors
+
+
+class _FakeAddDialog:
+    """Stands in for AddPublicElementDialog: offers ROIDescription with a value."""
+
+    def __init__(self, *_a, **_kw) -> None:
+        self.current_public_element = pydicom.DataElement(pydicom.tag.Tag(0x30060028), "ST", None)
+        self.ui = type("Ui", (), {"text_edit_element_value": type("T", (), {"toPlainText": lambda _s: "ADDED"})()})()
+
+    def setProperty(self, *_a) -> None:
+        pass
+
+    def exec(self) -> int:
+        return 1
+
+
+def test_add_into_an_item_after_a_delete_lands_in_that_item(qapp, monkeypatch) -> None:
+    """#72's add resolves the target item through the same lookup, so it must follow the row's position too."""
+    ds = _base_ds()
+    ds.StructureSetROISequence = _roi_items(["ONE", "TWO", "THREE", "FOUR"])
+    w = _widget(monkeypatch)
+    hdr = _header(_load(w, ds), "(3006, 0020)")
+    monkeypatch.setattr(M, "AddPublicElementDialog", _FakeAddDialog)
+
+    _delete_item(w, hdr, 1)
+    _select(w, hdr.child(1))  # the row now showing THREE
+    w.on_add_element()
+
+    items = w.current_dataset.StructureSetROISequence
+    assert [i.ROIName for i in items] == ["ONE", "THREE", "FOUR"]
+    assert [i.get("ROIDescription") for i in items] == [None, "ADDED", None]
