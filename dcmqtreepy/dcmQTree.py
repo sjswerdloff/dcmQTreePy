@@ -722,11 +722,19 @@ class DCMQtreePy(QMainWindow):
                     return False
                 choice = asked
         try:
-            self._save_dataset_to(Path(path), choice)
+            durable = self._save_dataset_to(Path(path), choice)
         except ValueError as e:
             self.non_native_warning_message("Save refused", str(e), QMessageBox.Ok)
             return False
         self.has_edits = False
+        if not durable:
+            # Saved, but not confirmed durable: the file was replaced, so this is a warning, never a failure (#85)
+            self.non_native_warning_message(
+                "Saved, not confirmed durable",
+                f"{path} was saved, but the system could not confirm the save is durable. "
+                "If the computer loses power soon, the previous version of the file may come back.",
+                QMessageBox.Ok,
+            )
         return True
 
     def _find_ghost_rows(self, item: QTreeWidgetItem) -> list[str]:
@@ -744,7 +752,12 @@ class DCMQtreePy(QMainWindow):
             ghosts.extend(self._find_ghost_rows(item.child(i)))
         return ghosts
 
-    def _save_dataset_to(self, path: Path, oversized_choice: OversizedChoice = OversizedChoice.KEEP_IMPLICIT) -> None:
+    def _save_dataset_to(self, path: Path, oversized_choice: OversizedChoice = OversizedChoice.KEEP_IMPLICIT) -> bool:
+        """Write the dataset to path atomically. Never shows a dialog.
+
+        Returns False when the file was written and replaced but the directory fsync failed, so the rename is not
+        confirmed durable (#85); True otherwise. Raises ValueError when the save is refused.
+        """
         if self._pending_errors:
             msgs = [str(e) for e in self._pending_errors.values()]
             raise ValueError("; ".join(msgs))
@@ -776,6 +789,7 @@ class DCMQtreePy(QMainWindow):
         if new_ts in (pydicom.uid.ImplicitVRLittleEndian, pydicom.uid.ExplicitVRLittleEndian):
             modified_ds.is_little_endian = True
         # Atomic write: temp in same directory, fsync, os.replace (issue #43)
+        durable = True
         tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         tmp_path = Path(tmp_name)
         try:
@@ -799,9 +813,11 @@ class DCMQtreePy(QMainWindow):
                         os.close(dir_fd)
                 except OSError as e:
                     logging.warning(f"Directory fsync failed (replace already succeeded): {e}")
+                    durable = False
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
+        return durable
 
     def _source_is_implicit(self) -> bool:
         """Whether the loaded file is Implicit VR LE, or records no transfer syntax."""
