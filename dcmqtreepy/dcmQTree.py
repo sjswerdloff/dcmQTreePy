@@ -682,18 +682,30 @@ class DCMQtreePy(QMainWindow):
                     )
                     return
         target_ds[public_element.tag] = public_element
-        if self.dcm_tree_widget is not None:
-            selected_items = self.dcm_tree_widget.selectedItems()
-            if selected_items is not None and len(selected_items) > 0:
-                selected_item = selected_items[0]
-                vr_as_string = selected_item.text(3)
-                if len(vr_as_string) == 0 or vr_as_string == "SQ":
-                    parent = selected_item
-                else:
-                    parent = selected_item.parent()
-                self._populate_tree_widget_item_from_element(parent, public_element)
-                parent.sortChildren(0, Qt.AscendingOrder)
-                self.has_edits = True
+        # The dataset changed, whatever was selected (#63).
+        self.has_edits = True
+        parent = self._add_parent_row()
+        if parent is not None:
+            self._populate_tree_widget_item_from_element(parent, public_element)
+            parent.sortChildren(0, Qt.AscendingOrder)
+
+    def _add_parent_row(self) -> QTreeWidgetItem | None:
+        """The tree row that a newly added element is shown under.
+
+        With a row selected: an item or sequence row (empty or SQ VR) itself, otherwise the selected row's parent.
+        With nothing selected the element went into the root dataset, so it is shown under the root row (#63).
+        None when no file is loaded.
+        """
+        if self.dcm_tree_widget is None:
+            return None
+        selected_items = self.dcm_tree_widget.selectedItems()
+        if selected_items:
+            selected_item = selected_items[0]
+            vr_as_string = selected_item.text(3)
+            if len(vr_as_string) == 0 or vr_as_string == "SQ":
+                return selected_item
+            return selected_item.parent()
+        return self.dcm_tree_widget.topLevelItem(0)
 
     def on_add_private_element(self):
         add_element_dialog = AddPrivateElementDialog(self)
@@ -737,31 +749,23 @@ class DCMQtreePy(QMainWindow):
                     )
                     return
         target_ds[private_element.tag] = private_element
-        if self.dcm_tree_widget is not None:
-            selected_items = self.dcm_tree_widget.selectedItems()
-            if selected_items is not None and len(selected_items) > 0:
-                selected_item = selected_items[0]
-                vr_as_string = selected_item.text(3)
-                if len(vr_as_string) == 0 or vr_as_string == "SQ":
-                    parent = selected_item
-                else:
-                    parent = selected_item.parent()
-                parent.childCount()
+        # The dataset changed, whatever was selected (#63).
+        self.has_edits = True
+        parent = self._add_parent_row()
+        if parent is not None:
+            children_tuples = [
+                self._convert_tag_as_string_to_tuple(parent.child(x).text(0)) for x in range(parent.childCount())
+            ]
+            is_private_block_already_present = False
+            for child_tuple in children_tuples:
+                if child_tuple[0] == block.group and child_tuple[1] == 0x10:
+                    is_private_block_already_present = True
 
-                children_tuples = [
-                    self._convert_tag_as_string_to_tuple(parent.child(x).text(0)) for x in range(parent.childCount())
-                ]
-                is_private_block_already_present = False
-                for child_tuple in children_tuples:
-                    if child_tuple[0] == block.group and child_tuple[1] == 0x10:
-                        is_private_block_already_present = True
-
-                if not is_private_block_already_present:
-                    private_creator_element = DataElement((block.group, 0x10), "LO", block.private_creator)
-                    self._populate_tree_widget_item_from_element(parent, private_creator_element)
-                self._populate_tree_widget_item_from_element(parent, private_element)
-                parent.sortChildren(0, Qt.AscendingOrder)
-                self.has_edits = True
+            if not is_private_block_already_present:
+                private_creator_element = DataElement((block.group, 0x10), "LO", block.private_creator)
+                self._populate_tree_widget_item_from_element(parent, private_creator_element)
+            self._populate_tree_widget_item_from_element(parent, private_element)
+            parent.sortChildren(0, Qt.AscendingOrder)
 
     @Slot()
     def dragEnterEvent(self, e):
