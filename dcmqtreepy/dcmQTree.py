@@ -6,6 +6,7 @@ import sys
 import tempfile
 from copy import deepcopy
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 
 import platformdirs
@@ -17,7 +18,10 @@ from dcm_mini_viewer.config.preferences_manager import (
 )
 from dcm_mini_viewer.main import MainWindow as DcmMiniViewer
 from pydicom import DataElement, Dataset, Sequence, dcmread, dcmwrite
+from pydicom.datadict import dictionary_VR
+from pydicom.dataelem import RawDataElement
 from pydicom.multival import MultiValue
+from pydicom.tag import BaseTag
 from pydicom.valuerep import VR
 from pynetdicom.presentation import build_context
 
@@ -54,6 +58,109 @@ INT_VRS = frozenset({"SS", "US", "SL", "UL", "SV", "UV"})
 FLOAT_VRS = frozenset({"FL", "FD", "DS"})
 # Always VM 1, and a backslash is legal inside the value, so their cell text is never split (#64).
 SINGLE_VALUED_TEXT_VRS = frozenset({"LT", "ST", "UT", "UR"})
+
+# VRs whose Explicit VR encoding has a 16-bit Value Length field (PS3.5 7.1.2). A value of one of these longer than
+# 0xFFFE cannot be written in Explicit VR except as UN (PS3.5 6.2.2, CP-1066) (#79).
+SHORT_LENGTH_VRS = frozenset(
+    {
+        "AE",
+        "AS",
+        "AT",
+        "CS",
+        "DA",
+        "DS",
+        "DT",
+        "FL",
+        "FD",
+        "IS",
+        "LO",
+        "LT",
+        "PN",
+        "SH",
+        "SL",
+        "SS",
+        "ST",
+        "TM",
+        "UI",
+        "UL",
+        "US",
+    }
+)
+MAX_SHORT_VALUE_LENGTH = 0xFFFE
+_BINARY_NUMBER_SIZES = {"AT": 4, "FL": 4, "FD": 8, "SL": 4, "SS": 2, "UL": 4, "US": 2}
+
+
+class OversizedChoice(Enum):
+    """How to save an Implicit VR source holding a value too long for Explicit VR (#79)."""
+
+    KEEP_IMPLICIT = "keep_implicit"
+    EXPLICIT_WITH_UN = "explicit_with_un"
+
+
+def _element_vr(tag: BaseTag, elem) -> str | None:
+    """The element's VR, from the dictionary when an Implicit VR raw element carries none."""
+    if elem.VR:
+        return str(elem.VR)
+    if tag.is_private:
+        return None
+    try:
+        return dictionary_VR(tag)
+    except KeyError:
+        return None
+
+
+def encoded_value_length(elem: DataElement) -> int:
+    """The length of elem's value as encoded, without encoding it (#79).
+
+    Only the VRs in SHORT_LENGTH_VRS are measured; any other VR returns 0. Text values are measured by their
+    backslash-joined form, padded to even length; binary numbers by count times size.
+    """
+    vr = str(elem.VR)
+    if vr not in SHORT_LENGTH_VRS or elem.value is None:
+        return 0
+    values = list(elem.value) if isinstance(elem.value, (list, tuple, MultiValue)) else [elem.value]
+    if vr in _BINARY_NUMBER_SIZES:
+        return len(values) * _BINARY_NUMBER_SIZES[vr]
+    text = "\\".join(getattr(v, "original_string", None) or str(v) for v in values)
+    length = len(text.encode("utf-8", errors="replace"))
+    return length + (length % 2)
+
+
+def find_oversized_elements(ds: Dataset) -> list[tuple[Dataset, BaseTag]]:
+    """Every element, at any depth, whose VR has a 16-bit length field and whose value is longer than 0xFFFE (#79).
+
+    Raw elements are measured by their recorded length, so their values are not converted; that is what makes this
+    cheap enough to run on every load (108 ms against 11.6 s for converting, on a 58.5 MB RT Structure Set).
+    Sequences are parsed to reach their items. Returns (dataset holding the element, tag) pairs.
+    """
+    found: list[tuple[Dataset, BaseTag]] = []
+    for tag in list(ds.keys()):
+        elem = ds.get_item(tag)
+        vr = _element_vr(tag, elem)
+        if vr == "SQ" or (vr is None and isinstance(elem, RawDataElement) and elem.length == 0xFFFFFFFF):
+            for item in ds[tag].value:
+                found.extend(find_oversized_elements(item))
+        elif vr in SHORT_LENGTH_VRS:
+            length = elem.length if isinstance(elem, RawDataElement) else encoded_value_length(elem)
+            if length > MAX_SHORT_VALUE_LENGTH:
+                found.append((ds, BaseTag(tag)))
+    return found
+
+
+def choose_transfer_syntax(
+    source_ts: str | None, has_oversized: bool, choice: OversizedChoice = OversizedChoice.KEEP_IMPLICIT
+) -> tuple[str, bool]:
+    """The (TransferSyntaxUID, is_implicit_VR) to save with (#57, #79).
+
+    Implicit VR LE (or no syntax recorded) becomes Explicit VR LE, so the file carries its VRs, unless a value is too
+    long for Explicit VR: then the choice decides. Every other source syntax is kept: converting big endian corrupts
+    pixel bytes, and Explicit VR LE and encapsulated syntaxes already carry VRs.
+    """
+    if not source_ts or source_ts == pydicom.uid.ImplicitVRLittleEndian:
+        if has_oversized and choice is OversizedChoice.KEEP_IMPLICIT:
+            return pydicom.uid.ImplicitVRLittleEndian, True
+        return pydicom.uid.ExplicitVRLittleEndian, False
+    return source_ts, False
 
 
 def resource_path(relative_path):
@@ -117,6 +224,8 @@ class DCMQtreePy(QMainWindow):
         self.current_dataset = Dataset()
         self._pruned_creators: list[tuple] = []  # (creator_tag, dataset_ref) for exact prune
         self._pending_errors: dict[int, Exception] = {}  # keyed by id(row) — same tag in root+item are distinct
+        # Values too long for Explicit VR: (dataset holding the element, tag), recorded at load from raw lengths (#79)
+        self._oversized: list[tuple[Dataset, BaseTag]] = []
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         logging.info("Loading Known Private Dictionaries")
@@ -549,18 +658,23 @@ class DCMQtreePy(QMainWindow):
             path = Path(file_name)
             self.previous_path = path.parent
             ds = dcmread(path, force=True)
+            # Before the tree build converts every value, while raw lengths are still free to read (#79)
+            self._oversized = find_oversized_elements(ds)
             # ds.remove_private_tags() # temporarily, until save as is working.
             self.current_dataset = ds
             self._pending_errors.clear()  # clear per-file (cora 13021 #8)
             self.dcm_tree_widget.blockSignals(True)
-            self.dcm_tree_widget.clear()
-            tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
-            context = build_context(ds.SOPClassUID)
-            abstract_syntax = str(context).splitlines()[0].split(sep=":")[1]
-            tree_child_item.setText(0, abstract_syntax)
-            self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
-            tree_child_item.setExpanded(True)
-            self.dcm_tree_widget.blockSignals(False)
+            # Unblock even if building raises: blocked signals would keep later edits out of the dataset (#68)
+            try:
+                self.dcm_tree_widget.clear()
+                tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
+                context = build_context(ds.SOPClassUID)
+                abstract_syntax = str(context).splitlines()[0].split(sep=":")[1]
+                tree_child_item.setText(0, abstract_syntax)
+                self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
+                tree_child_item.setExpanded(True)
+            finally:
+                self.dcm_tree_widget.blockSignals(False)
             self.has_edits = False
 
     def on_file_save_as(self):
@@ -599,8 +713,16 @@ class DCMQtreePy(QMainWindow):
                         QMessageBox.Ok,
                     )
                     return False
+        choice = OversizedChoice.KEEP_IMPLICIT
+        if not self._pending_errors and self._source_is_implicit():
+            oversized = self._current_oversized()
+            if oversized:
+                asked = self._ask_oversized_choice(oversized)
+                if asked is None:
+                    return False
+                choice = asked
         try:
-            self._save_dataset_to(Path(path))
+            self._save_dataset_to(Path(path), choice)
         except ValueError as e:
             self.non_native_warning_message("Save refused", str(e), QMessageBox.Ok)
             return False
@@ -622,7 +744,7 @@ class DCMQtreePy(QMainWindow):
             ghosts.extend(self._find_ghost_rows(item.child(i)))
         return ghosts
 
-    def _save_dataset_to(self, path: Path) -> None:
+    def _save_dataset_to(self, path: Path, oversized_choice: OversizedChoice = OversizedChoice.KEEP_IMPLICIT) -> None:
         if self._pending_errors:
             msgs = [str(e) for e in self._pending_errors.values()]
             raise ValueError("; ".join(msgs))
@@ -644,10 +766,15 @@ class DCMQtreePy(QMainWindow):
         # anything it cannot represent (private elements, OB/OW bytes) must survive.
         modified_ds = deepcopy(self.current_dataset)
         modified_ds.ensure_file_meta()
-        # Keep source transfer syntax (cora 13021 #5) — don't force explicit LE
-        if not modified_ds.file_meta.TransferSyntaxUID:
-            modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
-        modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
+        # Transfer syntax (#57, #79): downstream systems need the VRs, so Implicit VR LE becomes Explicit VR LE, unless a
+        # value is too long for Explicit VR; then the user's choice decides. Other source syntaxes are kept.
+        ts = modified_ds.file_meta.get("TransferSyntaxUID") if modified_ds.file_meta else None
+        has_oversized = self._source_is_implicit() and bool(self._current_oversized())
+        new_ts, is_implicit = choose_transfer_syntax(ts, has_oversized, oversized_choice)
+        modified_ds.file_meta.TransferSyntaxUID = new_ts
+        modified_ds.is_implicit_VR = is_implicit
+        if new_ts in (pydicom.uid.ImplicitVRLittleEndian, pydicom.uid.ExplicitVRLittleEndian):
+            modified_ds.is_little_endian = True
         # Atomic write: temp in same directory, fsync, os.replace (issue #43)
         tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         tmp_path = Path(tmp_name)
@@ -675,6 +802,78 @@ class DCMQtreePy(QMainWindow):
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
+
+    def _source_is_implicit(self) -> bool:
+        """Whether the loaded file is Implicit VR LE, or records no transfer syntax."""
+        meta = getattr(self.current_dataset, "file_meta", None)
+        ts = meta.get("TransferSyntaxUID") if meta else None
+        return not ts or ts == pydicom.uid.ImplicitVRLittleEndian
+
+    def _note_value_length(self, ds: Dataset, tag) -> None:
+        """Record an edited or added element if its value is now too long for Explicit VR (#79)."""
+        tag = BaseTag(pydicom.tag.Tag(tag))
+        if tag in ds and encoded_value_length(ds[tag]) > MAX_SHORT_VALUE_LENGTH:
+            if not any(d is ds and t == tag for d, t in self._oversized):
+                self._oversized.append((ds, tag))
+
+    @staticmethod
+    def _reachable_datasets(ds: Dataset) -> set[int]:
+        """ids of ds and every sequence item under it. Only sequences are opened; other values are not converted."""
+        ids = {id(ds)}
+        for tag in list(ds.keys()):
+            elem = ds.get_item(tag)
+            vr = _element_vr(tag, elem)
+            if vr == "SQ" or (vr is None and isinstance(elem, RawDataElement) and elem.length == 0xFFFFFFFF):
+                for item in ds[tag].value:
+                    ids |= DCMQtreePy._reachable_datasets(item)
+        return ids
+
+    def _current_oversized(self) -> list[tuple[Dataset, BaseTag]]:
+        """The recorded elements still in the dataset and still too long for Explicit VR (#79).
+
+        An element in a deleted sequence item is no longer reachable, and an edit may have shortened a value, so only
+        the recorded elements are re-measured; nothing else is walked except the sequence structure.
+        """
+        if not self._oversized:
+            return []
+        reachable = self._reachable_datasets(self.current_dataset)
+        return [
+            (d, t)
+            for d, t in self._oversized
+            if id(d) in reachable and t in d and encoded_value_length(d[t]) > MAX_SHORT_VALUE_LENGTH
+        ]
+
+    def _ask_oversized_choice(self, oversized: list[tuple[Dataset, BaseTag]]) -> OversizedChoice | None:
+        """Ask how to save values too long for Explicit VR. None means cancel: nothing is written (#79)."""
+        names = sorted({f"{t} {pydicom.datadict.keyword_for_tag(t) or 'private'}" for _, t in oversized})
+        app = QApplication.instance()
+        app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Question)
+        dlg.setWindowTitle("Values too long for Explicit VR")
+        dlg.setText(
+            f"{len(oversized)} value(s) are longer than 65534 bytes, the most Explicit VR can hold for their VR: "
+            + ", ".join(names)
+        )
+        dlg.setInformativeText(
+            "Keep Implicit VR (default): the file carries no VRs. Private VRs then depend on the reader's dictionary, "
+            "and the file cannot be compressed or exported to media.\n\n"
+            "Explicit VR with UN: every other element keeps its VR. The listed elements are written as UN "
+            "(PS3.5 6.2.2), so a reader must know their VR to decode them; pydicom 2.4.5, and so this application, "
+            "reads them back as raw bytes."
+        )
+        keep = dlg.addButton("Keep Implicit VR", QMessageBox.ButtonRole.AcceptRole)
+        explicit_un = dlg.addButton("Explicit VR with UN", QMessageBox.ButtonRole.AcceptRole)
+        dlg.addButton(QMessageBox.StandardButton.Cancel)
+        dlg.setDefaultButton(keep)
+        dlg.setProperty("help_id", "warnings")
+        dlg.exec()
+        clicked = dlg.clickedButton()
+        if clicked is keep:
+            return OversizedChoice.KEEP_IMPLICIT
+        if clicked is explicit_un:
+            return OversizedChoice.EXPLICIT_WITH_UN
+        return None
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
@@ -714,18 +913,31 @@ class DCMQtreePy(QMainWindow):
                     )
                     return
         target_ds[public_element.tag] = public_element
-        if self.dcm_tree_widget is not None:
-            selected_items = self.dcm_tree_widget.selectedItems()
-            if selected_items is not None and len(selected_items) > 0:
-                selected_item = selected_items[0]
-                vr_as_string = selected_item.text(3)
-                if len(vr_as_string) == 0 or vr_as_string == "SQ":
-                    parent = selected_item
-                else:
-                    parent = selected_item.parent()
-                self._populate_tree_widget_item_from_element(parent, public_element)
-                parent.sortChildren(0, Qt.AscendingOrder)
-                self.has_edits = True
+        self._note_value_length(target_ds, public_element.tag)
+        # The dataset changed, whatever was selected (#63).
+        self.has_edits = True
+        parent = self._add_parent_row()
+        if parent is not None:
+            self._populate_tree_widget_item_from_element(parent, public_element)
+            parent.sortChildren(0, Qt.AscendingOrder)
+
+    def _add_parent_row(self) -> QTreeWidgetItem | None:
+        """The tree row that a newly added element is shown under.
+
+        With a row selected: an item or sequence row (empty or SQ VR) itself, otherwise the selected row's parent.
+        With nothing selected the element went into the root dataset, so it is shown under the root row (#63).
+        None when no file is loaded.
+        """
+        if self.dcm_tree_widget is None:
+            return None
+        selected_items = self.dcm_tree_widget.selectedItems()
+        if selected_items:
+            selected_item = selected_items[0]
+            vr_as_string = selected_item.text(3)
+            if len(vr_as_string) == 0 or vr_as_string == "SQ":
+                return selected_item
+            return selected_item.parent()
+        return self.dcm_tree_widget.topLevelItem(0)
 
     def on_add_private_element(self):
         add_element_dialog = AddPrivateElementDialog(self)
@@ -768,32 +980,53 @@ class DCMQtreePy(QMainWindow):
                         QMessageBox.Ok,
                     )
                     return
-        target_ds[private_element.tag] = private_element
-        if self.dcm_tree_widget is not None:
-            selected_items = self.dcm_tree_widget.selectedItems()
-            if selected_items is not None and len(selected_items) > 0:
-                selected_item = selected_items[0]
-                vr_as_string = selected_item.text(3)
-                if len(vr_as_string) == 0 or vr_as_string == "SQ":
-                    parent = selected_item
-                else:
-                    parent = selected_item.parent()
-                parent.childCount()
+        # The dialog built its block on a scratch dataset, so its tags assume creator slot 0x10. Resolve the block in the
+        # target dataset instead: that finds an existing creator or reserves the next free slot, and the creator element
+        # goes into the dataset with the member. The tree follows the dataset (#63).
+        slot = self._private_creator_slot(target_ds, block.group, block.private_creator)
+        if slot is None:
+            self.non_native_warning_message(
+                "Add refused",
+                f"Group {block.group:04X} has no free private creator slot (0010-00FF are all in use).",
+                QMessageBox.Ok,
+            )
+            return
+        creator_element = target_ds[pydicom.tag.Tag(block.group, slot)]
+        member_tag = pydicom.tag.Tag(block.group, (slot << 8) | add_element_dialog.current_byte_offset)
+        target_ds.add_new(member_tag, private_element.VR, private_element.value)
+        self._note_value_length(target_ds, member_tag)
+        member_element = target_ds[member_tag]
+        # The dataset changed, whatever was selected (#63).
+        self.has_edits = True
+        parent = self._add_parent_row()
+        if parent is not None:
+            shown_tags = {
+                pydicom.tag.Tag(self._convert_tag_as_string_to_tuple(parent.child(x).text(0)))
+                for x in range(parent.childCount())
+            }
+            if creator_element.tag not in shown_tags:
+                self._populate_tree_widget_item_from_element(parent, creator_element)
+            self._populate_tree_widget_item_from_element(parent, member_element)
+            parent.sortChildren(0, Qt.AscendingOrder)
 
-                children_tuples = [
-                    self._convert_tag_as_string_to_tuple(parent.child(x).text(0)) for x in range(parent.childCount())
-                ]
-                is_private_block_already_present = False
-                for child_tuple in children_tuples:
-                    if child_tuple[0] == block.group and child_tuple[1] == 0x10:
-                        is_private_block_already_present = True
+    @staticmethod
+    def _private_creator_slot(ds: pydicom.Dataset, group: int, creator: str) -> int | None:
+        """The element byte (0x10-0xFF) of creator's block in ds, reserving the first free slot if it has none.
 
-                if not is_private_block_already_present:
-                    private_creator_element = DataElement((block.group, 0x10), "LO", block.private_creator)
-                    self._populate_tree_widget_item_from_element(parent, private_creator_element)
-                self._populate_tree_widget_item_from_element(parent, private_element)
-                parent.sortChildren(0, Qt.AscendingOrder)
-                self.has_edits = True
+        Returns None if all 240 slots hold other creators. pydicom's Dataset.private_block() is not used: in pydicom
+        2.4.5 its cached block makes deepcopy of a dataset read from file recurse without end, and save deep-copies.
+        """
+        free = None
+        for slot in range(0x10, 0x100):
+            elem = ds.get(pydicom.tag.Tag(group, slot))
+            if elem is None:
+                if free is None:
+                    free = slot
+            elif elem.value == creator:
+                return slot
+        if free is not None:
+            ds.add_new((group, free), "LO", creator)
+        return free
 
     @Slot()
     def dragEnterEvent(self, e):
@@ -849,6 +1082,7 @@ class DCMQtreePy(QMainWindow):
                 return
             if elem.VR != "SQ":
                 elem.value = self._parse_value_cell_text(new_value, elem.VR)
+                self._note_value_length(parent_ds, tag)
             # Clear per-row error on success (cora: correcting a bad edit unblocks save)
             self._pending_errors.pop(id(item), None)
         except (KeyError, ValueError) as e:
@@ -907,7 +1141,8 @@ class DCMQtreePy(QMainWindow):
             owner_ds = self._find_sequence_owner(parent)
             seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
             if seq_elem is not None and seq_elem.VR == "SQ":
-                item_idx = int(item.text(2)) - 1
+                # The item's position under its header, never its displayed number, which a delete leaves stale (#65).
+                item_idx = parent.indexOfChild(item)
                 return owner_ds, True, seq_tag, item_idx
             return self.current_dataset, False, None, None
         # Climb through nested sequence items recursively
@@ -924,7 +1159,7 @@ class DCMQtreePy(QMainWindow):
                 owner_ds = self._find_sequence_owner(current_parent)
                 seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
                 if seq_elem is not None and seq_elem.VR == "SQ":
-                    item_idx = int(current.text(2)) - 1
+                    item_idx = current_parent.indexOfChild(current)  # position, not displayed number (#65)
                     if 0 <= item_idx < len(seq_elem.value):
                         return seq_elem.value[item_idx], True, seq_tag, item_idx
                 return self.current_dataset, False, None, None
@@ -955,7 +1190,7 @@ class DCMQtreePy(QMainWindow):
                 owner = self._find_sequence_owner(current_parent)
                 seq_elem = owner.get(pydicom.tag.Tag(seq_tag))
                 if seq_elem is not None and seq_elem.VR == "SQ":
-                    item_idx = int(current.text(2)) - 1
+                    item_idx = current_parent.indexOfChild(current)  # position, not displayed number (#65)
                     if 0 <= item_idx < len(seq_elem.value):
                         return seq_elem.value[item_idx]
                 return self.current_dataset
@@ -1063,7 +1298,22 @@ class DCMQtreePy(QMainWindow):
                         )
                         return
                 parent.takeChild(child_index)
+                if is_seq_item:
+                    self._renumber_item_rows(parent)
                 self.has_edits = True
+
+    def _renumber_item_rows(self, header: QTreeWidgetItem) -> None:
+        """Show each remaining item under a sequence header with its 1-based position (#65).
+
+        Resolution already uses the row's position, so this is what the user reads. Signals are blocked so the
+        rewrite is not taken as an edit.
+        """
+        blocked = self.dcm_tree_widget.blockSignals(True)
+        try:
+            for i in range(header.childCount()):
+                header.child(i).setText(2, str(i + 1))
+        finally:
+            self.dcm_tree_widget.blockSignals(blocked)
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyPress and event.key() == Qt.Key.Key_F1:
