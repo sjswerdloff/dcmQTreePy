@@ -521,14 +521,17 @@ class DCMQtreePy(QMainWindow):
             self.current_dataset = ds
             self._pending_errors.clear()  # clear per-file (cora 13021 #8)
             self.dcm_tree_widget.blockSignals(True)
-            self.dcm_tree_widget.clear()
-            tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
-            context = build_context(ds.SOPClassUID)
-            abstract_syntax = str(context).splitlines()[0].split(sep=":")[1]
-            tree_child_item.setText(0, abstract_syntax)
-            self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
-            tree_child_item.setExpanded(True)
-            self.dcm_tree_widget.blockSignals(False)
+            # Unblock even if building raises: blocked signals would keep later edits out of the dataset (#68)
+            try:
+                self.dcm_tree_widget.clear()
+                tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
+                context = build_context(ds.SOPClassUID)
+                abstract_syntax = str(context).splitlines()[0].split(sep=":")[1]
+                tree_child_item.setText(0, abstract_syntax)
+                self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
+                tree_child_item.setExpanded(True)
+            finally:
+                self.dcm_tree_widget.blockSignals(False)
             self.has_edits = False
 
     def on_file_save_as(self):
@@ -612,10 +615,33 @@ class DCMQtreePy(QMainWindow):
         # anything it cannot represent (private elements, OB/OW bytes) must survive.
         modified_ds = deepcopy(self.current_dataset)
         modified_ds.ensure_file_meta()
-        # Keep source transfer syntax (cora 13021 #5) — don't force explicit LE
-        if not modified_ds.file_meta.TransferSyntaxUID:
-            modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
-        modified_ds.is_implicit_VR = modified_ds.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
+        # Transfer syntax rule (Stuart 2026-11-01/02, issue #57): downstream systems
+        # are the customer of the output — saved files must carry their VRs.
+        #   Implicit VR LE  → Explicit VR LE, EXCEPT when ContourData (3006,0050) or
+        #     CompensatorThicknessData (300A,00EC) exceeds 64KB: keep Implicit VR LE
+        #     (pydicom 2.4.5 rewrites large DS as UN under explicit, silently corrupting).
+        #     If private elements are also present, warn (informational, no choice):
+        #     implicit means downstream consumers need those private VRs.
+        #   Explicit VR BE  → keep as-is (converting corrupts pixel bytes)
+        #   Explicit VR LE and compressed/encapsulated → keep (already carry VRs)
+        ts = modified_ds.file_meta.get("TransferSyntaxUID") if modified_ds.file_meta else None
+        if not ts or ts == pydicom.uid.ImplicitVRLittleEndian:
+            has_large_ds = self._has_oversized_ds(modified_ds)
+            has_private = self._has_private_elements(modified_ds)
+            if has_large_ds and has_private:
+                self.non_native_warning_message(
+                    "Save warning",
+                    "Large DS element (>64KB) and private elements present. "
+                    "Saving as Implicit VR LE to avoid corrupting the DS data. "
+                    "Downstream consumers will need the private dictionary.",
+                    QMessageBox.Ok,
+                )
+            if not has_large_ds:
+                modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
+                modified_ds.is_implicit_VR = False
+            # else: keep Implicit VR LE
+        else:
+            modified_ds.is_implicit_VR = False  # explicit BE and LE carry VRs
         # Atomic write: temp in same directory, fsync, os.replace (issue #43)
         tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         tmp_path = Path(tmp_name)
@@ -643,6 +669,49 @@ class DCMQtreePy(QMainWindow):
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
+
+    @staticmethod
+    def _has_private_elements(ds) -> bool:
+        """Check for private elements anywhere in the dataset tree."""
+        for k in list(ds.keys()):
+            if k.group % 2 == 1:
+                return True
+            e = ds[k]
+            if getattr(e, "VR", None) == "SQ":
+                for item in e.value:
+                    if DCMQtreePy._has_private_elements(item):
+                        return True
+        return False
+
+    @staticmethod
+    def _has_oversized_ds(ds) -> bool:
+        """Check if ContourData (3006,0050) or CompensatorThicknessData (300A,00EC)
+        exceeds 64KB anywhere in the dataset tree (they sit inside sequences).
+        Stuart 2026-11-02: only these two are known to overflow."""
+        for tag in (pydicom.tag.Tag("ContourData"), pydicom.tag.Tag("CompensatorThicknessData")):
+            if DCMQtreePy._find_oversized_ds_in(ds, tag):
+                return True
+        return False
+
+    @staticmethod
+    def _find_oversized_ds_in(ds, tag) -> bool:
+        elem = ds.get(tag)
+        if elem is not None and getattr(elem, "VR", None) == "DS":
+            val = elem.value
+            if isinstance(val, (list, tuple)):
+                total = sum(len(str(v)) for v in val) + len(val)
+            else:
+                total = len(str(val))
+            if total > 65534:
+                return True
+        # recurse into sequences (access via keys to force-parse raw elements)
+        for k in list(ds.keys()):
+            e = ds[k]
+            if getattr(e, "VR", None) == "SQ":
+                for item in e.value:
+                    if DCMQtreePy._find_oversized_ds_in(item, tag):
+                        return True
+        return False
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
@@ -682,18 +751,30 @@ class DCMQtreePy(QMainWindow):
                     )
                     return
         target_ds[public_element.tag] = public_element
-        if self.dcm_tree_widget is not None:
-            selected_items = self.dcm_tree_widget.selectedItems()
-            if selected_items is not None and len(selected_items) > 0:
-                selected_item = selected_items[0]
-                vr_as_string = selected_item.text(3)
-                if len(vr_as_string) == 0 or vr_as_string == "SQ":
-                    parent = selected_item
-                else:
-                    parent = selected_item.parent()
-                self._populate_tree_widget_item_from_element(parent, public_element)
-                parent.sortChildren(0, Qt.AscendingOrder)
-                self.has_edits = True
+        # The dataset changed, whatever was selected (#63).
+        self.has_edits = True
+        parent = self._add_parent_row()
+        if parent is not None:
+            self._populate_tree_widget_item_from_element(parent, public_element)
+            parent.sortChildren(0, Qt.AscendingOrder)
+
+    def _add_parent_row(self) -> QTreeWidgetItem | None:
+        """The tree row that a newly added element is shown under.
+
+        With a row selected: an item or sequence row (empty or SQ VR) itself, otherwise the selected row's parent.
+        With nothing selected the element went into the root dataset, so it is shown under the root row (#63).
+        None when no file is loaded.
+        """
+        if self.dcm_tree_widget is None:
+            return None
+        selected_items = self.dcm_tree_widget.selectedItems()
+        if selected_items:
+            selected_item = selected_items[0]
+            vr_as_string = selected_item.text(3)
+            if len(vr_as_string) == 0 or vr_as_string == "SQ":
+                return selected_item
+            return selected_item.parent()
+        return self.dcm_tree_widget.topLevelItem(0)
 
     def on_add_private_element(self):
         add_element_dialog = AddPrivateElementDialog(self)
@@ -736,32 +817,52 @@ class DCMQtreePy(QMainWindow):
                         QMessageBox.Ok,
                     )
                     return
-        target_ds[private_element.tag] = private_element
-        if self.dcm_tree_widget is not None:
-            selected_items = self.dcm_tree_widget.selectedItems()
-            if selected_items is not None and len(selected_items) > 0:
-                selected_item = selected_items[0]
-                vr_as_string = selected_item.text(3)
-                if len(vr_as_string) == 0 or vr_as_string == "SQ":
-                    parent = selected_item
-                else:
-                    parent = selected_item.parent()
-                parent.childCount()
+        # The dialog built its block on a scratch dataset, so its tags assume creator slot 0x10. Resolve the block in the
+        # target dataset instead: that finds an existing creator or reserves the next free slot, and the creator element
+        # goes into the dataset with the member. The tree follows the dataset (#63).
+        slot = self._private_creator_slot(target_ds, block.group, block.private_creator)
+        if slot is None:
+            self.non_native_warning_message(
+                "Add refused",
+                f"Group {block.group:04X} has no free private creator slot (0010-00FF are all in use).",
+                QMessageBox.Ok,
+            )
+            return
+        creator_element = target_ds[pydicom.tag.Tag(block.group, slot)]
+        member_tag = pydicom.tag.Tag(block.group, (slot << 8) | add_element_dialog.current_byte_offset)
+        target_ds.add_new(member_tag, private_element.VR, private_element.value)
+        member_element = target_ds[member_tag]
+        # The dataset changed, whatever was selected (#63).
+        self.has_edits = True
+        parent = self._add_parent_row()
+        if parent is not None:
+            shown_tags = {
+                pydicom.tag.Tag(self._convert_tag_as_string_to_tuple(parent.child(x).text(0)))
+                for x in range(parent.childCount())
+            }
+            if creator_element.tag not in shown_tags:
+                self._populate_tree_widget_item_from_element(parent, creator_element)
+            self._populate_tree_widget_item_from_element(parent, member_element)
+            parent.sortChildren(0, Qt.AscendingOrder)
 
-                children_tuples = [
-                    self._convert_tag_as_string_to_tuple(parent.child(x).text(0)) for x in range(parent.childCount())
-                ]
-                is_private_block_already_present = False
-                for child_tuple in children_tuples:
-                    if child_tuple[0] == block.group and child_tuple[1] == 0x10:
-                        is_private_block_already_present = True
+    @staticmethod
+    def _private_creator_slot(ds: pydicom.Dataset, group: int, creator: str) -> int | None:
+        """The element byte (0x10-0xFF) of creator's block in ds, reserving the first free slot if it has none.
 
-                if not is_private_block_already_present:
-                    private_creator_element = DataElement((block.group, 0x10), "LO", block.private_creator)
-                    self._populate_tree_widget_item_from_element(parent, private_creator_element)
-                self._populate_tree_widget_item_from_element(parent, private_element)
-                parent.sortChildren(0, Qt.AscendingOrder)
-                self.has_edits = True
+        Returns None if all 240 slots hold other creators. pydicom's Dataset.private_block() is not used: in pydicom
+        2.4.5 its cached block makes deepcopy of a dataset read from file recurse without end, and save deep-copies.
+        """
+        free = None
+        for slot in range(0x10, 0x100):
+            elem = ds.get(pydicom.tag.Tag(group, slot))
+            if elem is None:
+                if free is None:
+                    free = slot
+            elif elem.value == creator:
+                return slot
+        if free is not None:
+            ds.add_new((group, free), "LO", creator)
+        return free
 
     @Slot()
     def dragEnterEvent(self, e):
