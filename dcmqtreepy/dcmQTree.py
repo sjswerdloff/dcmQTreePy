@@ -521,14 +521,17 @@ class DCMQtreePy(QMainWindow):
             self.current_dataset = ds
             self._pending_errors.clear()  # clear per-file (cora 13021 #8)
             self.dcm_tree_widget.blockSignals(True)
-            self.dcm_tree_widget.clear()
-            tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
-            context = build_context(ds.SOPClassUID)
-            abstract_syntax = str(context).splitlines()[0].split(sep=":")[1]
-            tree_child_item.setText(0, abstract_syntax)
-            self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
-            tree_child_item.setExpanded(True)
-            self.dcm_tree_widget.blockSignals(False)
+            # Unblock even if building raises: blocked signals would keep later edits out of the dataset (#68)
+            try:
+                self.dcm_tree_widget.clear()
+                tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
+                context = build_context(ds.SOPClassUID)
+                abstract_syntax = str(context).splitlines()[0].split(sep=":")[1]
+                tree_child_item.setText(0, abstract_syntax)
+                self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
+                tree_child_item.setExpanded(True)
+            finally:
+                self.dcm_tree_widget.blockSignals(False)
             self.has_edits = False
 
     def on_file_save_as(self):
