@@ -17,6 +17,7 @@ from dcm_mini_viewer.config.preferences_manager import (
 )
 from dcm_mini_viewer.main import MainWindow as DcmMiniViewer
 from pydicom import DataElement, Dataset, Sequence, dcmread, dcmwrite
+from pydicom.multival import MultiValue
 from pydicom.valuerep import VR
 from pynetdicom.presentation import build_context
 
@@ -46,6 +47,13 @@ from dcmqtreepy.new_privates import new_private_dictionaries
 from dcmqtreepy.qt_assistant_launcher import HelpAssistant
 
 logger = logging.getLogger(__name__)
+
+# VRs whose value is a byte payload. Their value cells are not editable, and a change to one is refused (#64).
+BINARY_VRS = frozenset({VR.OB, VR.OW, VR.OB_OW, VR.OD, VR.OF, VR.OL, VR.OV, VR.UN})
+INT_VRS = frozenset({"SS", "US", "SL", "UL", "SV", "UV"})
+FLOAT_VRS = frozenset({"FL", "FD", "DS"})
+# Always VM 1, and a backslash is legal inside the value, so their cell text is never split (#64).
+SINGLE_VALUED_TEXT_VRS = frozenset({"LT", "ST", "UT", "UR"})
 
 
 def resource_path(relative_path):
@@ -242,19 +250,49 @@ class DCMQtreePy(QMainWindow):
         if help_id := action.property("help_id"):
             self.logger.debug(f"Action has help_id: {help_id}")
 
+    @staticmethod
+    def _value_row_flags(elem: DataElement) -> Qt.ItemFlag:
+        """Flags for an element row: editable unless its value is a byte payload (#64)."""
+        flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+        if elem.VR not in BINARY_VRS:
+            flags |= Qt.ItemFlag.ItemIsEditable
+        return flags
+
+    @staticmethod
+    def _value_cell_text(elem: DataElement) -> str:
+        """The text shown in an element row's value cell. OB/OW/OD/OF payloads are not shown."""
+        if elem.VR in (VR.OB, VR.OW, VR.OB_OW, VR.OD, VR.OF):
+            return ""
+        if elem.value is None:
+            return ""
+        if isinstance(elem.value, (MultiValue, list)):
+            # The DICOM form, so the cell parses back into the same values (#64)
+            return "\\".join(str(v) for v in elem.value)
+        return str(elem.value)
+
+    @staticmethod
+    def _parse_value_cell_text(text: str, vr: str):
+        """A value cell's text as the value for vr: components separated by backslash, as DICOM encodes them (#64).
+
+        LT, ST, UT and UR are single-valued and taken as typed. An empty cell clears the value. Numeric components
+        are converted by VR, and one that does not convert raises ValueError.
+        """
+        if vr in SINGLE_VALUED_TEXT_VRS:
+            return text
+        convert = int if vr in INT_VRS else float if vr in FLOAT_VRS else None
+        if text == "":
+            return "" if convert is None else None
+        parts = text.split("\\")
+        values = parts if convert is None else [convert(part) for part in parts]
+        return values[0] if len(values) == 1 else values
+
     def _populate_tree_widget_item_from_element(self, parent: QTreeWidgetItem | QTreeWidget, elem: DataElement):
         if elem.VR != VR.SQ:
             tree_child_item = QTreeWidgetItem(parent)
-            tree_child_item.setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+            tree_child_item.setFlags(self._value_row_flags(elem))
             tree_child_item.setText(0, str(elem.tag))
             tree_child_item.setText(1, elem.name)
-            if elem.VR not in [VR.OB, VR.OW, VR.OB_OW, VR.OD, VR.OF]:
-                if elem.value is None:
-                    tree_child_item.setText(2, "")
-                else:
-                    tree_child_item.setText(2, str(elem.value))
-            else:
-                logging.warning("Need to stash away OB/OW type values")
+            tree_child_item.setText(2, self._value_cell_text(elem))
             tree_child_item.setText(3, str(elem.VR))
             tree_child_item.setText(4, elem.keyword)
         else:
@@ -278,16 +316,10 @@ class DCMQtreePy(QMainWindow):
         for elem in ds:
             if elem.VR != VR.SQ:
                 tree_child_item = QTreeWidgetItem(parent)
-                tree_child_item.setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+                tree_child_item.setFlags(self._value_row_flags(elem))
                 tree_child_item.setText(0, str(elem.tag))
                 tree_child_item.setText(1, elem.name)
-                if elem.VR not in [VR.OB, VR.OW, VR.OB_OW, VR.OD, VR.OF]:
-                    if elem.value is None:
-                        tree_child_item.setText(2, "")
-                    else:
-                        tree_child_item.setText(2, str(elem.value))
-                else:
-                    logging.warning("Need to stash away OB/OW type values")
+                tree_child_item.setText(2, self._value_cell_text(elem))
                 tree_child_item.setText(3, str(elem.VR))
                 tree_child_item.setText(4, elem.keyword)
             else:
@@ -804,14 +836,19 @@ class DCMQtreePy(QMainWindow):
         parent_ds, _, _, _ = self._find_parent_dataset(item)
         try:
             elem = parent_ds[pydicom.tag.Tag(tag)]
-            if elem.VR in ("SS", "US", "SL", "UL"):
-                elem.value = int(new_value)
-            elif elem.VR in ("FL", "FD", "DS"):
-                elem.value = float(new_value)
-            elif elem.VR == "SQ":
-                pass
-            else:
-                elem.value = new_value
+            if elem.VR in BINARY_VRS:
+                # A byte payload has no text form here: put the cell back and leave the value alone (#64)
+                was_blocked = self.dcm_tree_widget.blockSignals(True)
+                try:
+                    item.setText(2, self._value_cell_text(elem))
+                finally:
+                    self.dcm_tree_widget.blockSignals(was_blocked)
+                self.non_native_warning_message(
+                    "Edit refused", f"{tag_as_string} is {elem.VR}: a binary value cannot be edited as text.", QMessageBox.Ok
+                )
+                return
+            if elem.VR != "SQ":
+                elem.value = self._parse_value_cell_text(new_value, elem.VR)
             # Clear per-row error on success (cora: correcting a bad edit unblocks save)
             self._pending_errors.pop(id(item), None)
         except (KeyError, ValueError) as e:
