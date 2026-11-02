@@ -612,14 +612,15 @@ class DCMQtreePy(QMainWindow):
         # anything it cannot represent (private elements, OB/OW bytes) must survive.
         modified_ds = deepcopy(self.current_dataset)
         modified_ds.ensure_file_meta()
-        # Transfer syntax rule (Stuart 2026-11-01, issue #57): downstream systems
+        # Transfer syntax rule (Stuart 2026-11-01/02, issue #57): downstream systems
         # are the customer of the output — saved files must carry their VRs.
         #   Implicit VR LE  → Explicit VR LE (private elements need VRs downstream)
-        #   Explicit VR BE  → Explicit VR LE (retired syntax)
+        #   Explicit VR BE  → keep as-is (Stuart 2026-11-02: it already carries VRs;
+        #     converting via pydicom 2.4.5 silently corrupts pixel bytes)
         #   Explicit VR LE and compressed/encapsulated → keep (already carry VRs;
         #     forcing uncompressed onto encapsulated pixel data writes invalid files)
         ts = modified_ds.file_meta.TransferSyntaxUID
-        if not ts or ts == pydicom.uid.ImplicitVRLittleEndian or ts == pydicom.uid.ExplicitVRBigEndian:
+        if not ts or ts == pydicom.uid.ImplicitVRLittleEndian:
             modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
         modified_ds.is_implicit_VR = False  # we never write implicit (issue #57)
         # Atomic write: temp in same directory, fsync, os.replace (issue #43)

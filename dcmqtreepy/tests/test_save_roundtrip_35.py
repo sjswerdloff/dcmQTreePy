@@ -1535,17 +1535,25 @@ class TestTransferSyntaxRule:
             assert elem is not None, "private member missing"
             assert elem.value in ("test-value", b"test-value"), f"value lost: {elem.value}"
 
-    def test_big_endian_source_saves_explicit_le(self, qapp, monkeypatch):
+    def test_big_endian_source_keeps_syntax(self, qapp, monkeypatch):
+        """Stuart 2026-11-02: keep Explicit VR Big Endian as it comes in.
+        Converting via pydicom 2.4.5 silently corrupts pixel bytes."""
         w = M.DCMQtreePy()
         monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
-        _render_base(w, _base())
-        w.current_dataset.ensure_file_meta()
-        w.current_dataset.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRBigEndian
+        from pydicom.data import get_testdata_file
+
+        src = get_testdata_file("MR_small_bigendian.dcm")
+        assert src is not None, "MR_small_bigendian.dcm test file not found"
         with tempfile.TemporaryDirectory() as td:
+            w.populate_tree_widget_from_file(str(src))
             out = pathlib.Path(td) / "bigendian.dcm"
             w._save_dataset_to(out)
             saved = pydicom.dcmread(out, force=True)
-            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ExplicitVRLittleEndian
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ExplicitVRBigEndian, (
+                f"big-endian syntax changed: {saved.file_meta.TransferSyntaxUID}"
+            )
+            original = pydicom.dcmread(src, force=True)
+            assert list(saved.pixel_array.flat) == list(original.pixel_array.flat), "pixel data corrupted by save"
 
     def test_explicit_le_source_keeps_syntax(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
