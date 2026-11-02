@@ -788,6 +788,10 @@ class DCMQtreePy(QMainWindow):
         modified_ds.is_implicit_VR = is_implicit
         if new_ts in (pydicom.uid.ImplicitVRLittleEndian, pydicom.uid.ExplicitVRLittleEndian):
             modified_ds.is_little_endian = True
+        # Write the file a symlink points to, not the link: os.replace would swap the link for a regular file and
+        # leave its target unchanged (#69). Resolving first keeps the temp file beside the real file, so the
+        # replace stays atomic.
+        path = path.resolve()
         # Atomic write: temp in same directory, fsync, os.replace (issue #43)
         durable = True
         tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
