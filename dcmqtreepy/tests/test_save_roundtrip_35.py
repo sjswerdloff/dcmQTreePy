@@ -1712,3 +1712,37 @@ class TestTransferSyntaxRule:
             saved = pydicom.dcmread(out, force=True)
             assert saved.is_implicit_VR is True
             assert not any("warning" in t.lower() for t in fired), f"unexpected warning: {fired}"
+
+    def test_large_compensator_data_stays_implicit(self, qapp, monkeypatch):
+        """Real Ion Plan (RTPLAN_Compensator.dcm) with CompensatorThicknessData
+        inflated over 64KB: keep Implicit VR LE. Source: IBA phantom (ZZIBA^DEPTHEAD)
+        RT Ion Plan from Stuart's MacBook Pro, sha256 fdc09549..."""
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        data_dir = pathlib.Path(__file__).parent / "data"
+        src = data_dir / "RTPLAN_Compensator.dcm"
+        assert src.exists(), "RTPLAN_Compensator.dcm test data not found"
+        with tempfile.TemporaryDirectory() as td:
+            ds = pydicom.dcmread(src, force=True)
+            large_values = ["0.000"] * 20000
+
+            def inflate_compensator(d):
+                for k in list(d.keys()):
+                    e = d[k]
+                    if getattr(e, "VR", None) == "SQ":
+                        for item in e.value:
+                            if inflate_compensator(item):
+                                return True
+                    elif k == pydicom.tag.Tag("CompensatorThicknessData"):
+                        d[k] = pydicom.DataElement(k, "DS", large_values)
+                        return True
+                return False
+
+            assert inflate_compensator(ds), "no CompensatorThicknessData found"
+            modified_src = pathlib.Path(td) / "ionplan-large.dcm"
+            ds.save_as(modified_src)
+            w.populate_tree_widget_from_file(str(modified_src))
+            out = pathlib.Path(td) / "ionplan-out.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.is_implicit_VR is True, "large CompensatorThicknessData did not stay implicit"
