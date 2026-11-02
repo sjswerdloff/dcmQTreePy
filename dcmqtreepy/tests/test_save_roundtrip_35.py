@@ -1505,7 +1505,7 @@ class TestAtomicWrite:
 
 class TestTransferSyntaxRule:
     """issue #57: never write Implicit VR — downstream systems need the VRs.
-    Stuart's ruling 2026-11-01: implicit → explicit LE, big-endian → explicit LE,
+    Stuart's ruling 2026-11-01/02: implicit → explicit LE, big-endian kept as-is,
     explicit LE and compressed stay as-is."""
 
     def test_implicit_source_saves_explicit_le(self, qapp, monkeypatch):
