@@ -689,7 +689,8 @@ class TestReview13021DeletePrune:
             ghost.setText(1, "Private tag data")
             ghost.setText(2, "EDITED")
             ghost.setText(3, "LO")
-            w._set_item_dirty(ghost, 2)
+            # What refuses the save: the row's own edit records a pending error (#71)
+            assert w._pending_errors, "ghost edit did not record a pending error"
             w.has_edits = True
             fired = []
             monkeypatch.setattr(
@@ -1018,6 +1019,8 @@ class TestBlocker4EditedRowMustFailLoud:
         ghost.setText(2, "edited-value")
         ghost.setText(3, "LO")
         ghost.setText(4, "")
+        # What refuses the save: the row's own edit records a pending error (#71)
+        assert w._pending_errors, "ghost edit did not record a pending error"
         with tempfile.TemporaryDirectory() as td:
             out = pathlib.Path(td) / "ghost.dcm"
             with pytest.raises(ValueError, match="0009"):
@@ -1210,7 +1213,8 @@ class TestCoraReproNestedOps:
         ghost = QTreeWidgetItem(w.dcm_tree_widget.topLevelItem(0))
         ghost.setText(0, "(0009, 2010)")
         ghost.setText(2, "EDITED")
-        w._set_item_dirty(ghost, 2)
+        # What refuses the save: the row's own edit records a pending error (#71)
+        assert w._pending_errors, "ghost edit did not record a pending error"
         w.has_edits = True
         fired = []
         monkeypatch.setattr(

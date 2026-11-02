@@ -692,27 +692,12 @@ class DCMQtreePy(QMainWindow):
         self.previous_save_path = path.parent
         self._perform_save(str(path))
 
-    def _set_item_dirty(self, item: QTreeWidgetItem, column: int) -> None:
-        """Mark a tree cell as edited/dirty so save can detect ghost rows."""
-        item.setData(column, Qt.ItemDataRole.UserRole, True)
-
     def _perform_save(self, path: str) -> bool:
-        """Save with a pre-flight check: refuse if ghost rows exist.
+        """Save, asking first if a value is too long for Explicit VR.
 
-        Returns True on successful save, False on refusal.
+        An edited row whose element cannot be resolved is refused through its pending error, recorded by
+        on_tree_item_changed, which _save_dataset_to raises on (#71). Returns True on success, False on refusal.
         """
-        # Check for ghost rows — edited rows whose elements can't be resolved
-        if self.dcm_tree_widget is not None:
-            top = self.dcm_tree_widget.topLevelItem(0)
-            if top is not None:
-                ghosts = self._find_ghost_rows(top)
-                if ghosts:
-                    self.non_native_warning_message(
-                        "Save refused",
-                        f"Unresolvable edited rows: {', '.join(ghosts)}",
-                        QMessageBox.Ok,
-                    )
-                    return False
         choice = OversizedChoice.KEEP_IMPLICIT
         if not self._pending_errors and self._source_is_implicit():
             oversized = self._current_oversized()
@@ -728,21 +713,6 @@ class DCMQtreePy(QMainWindow):
             return False
         self.has_edits = False
         return True
-
-    def _find_ghost_rows(self, item: QTreeWidgetItem) -> list[str]:
-        """Find dirty rows whose tags are not in current_dataset."""
-        ghosts = []
-        if item.data(2, Qt.ItemDataRole.UserRole):
-            tag_str = item.text(0)
-            try:
-                tag = self._convert_tag_as_string_to_tuple(tag_str)
-                if pydicom.tag.Tag(tag) not in self.current_dataset:
-                    ghosts.append(tag_str)
-            except (ValueError, TypeError):
-                ghosts.append(tag_str)
-        for i in range(item.childCount()):
-            ghosts.extend(self._find_ghost_rows(item.child(i)))
-        return ghosts
 
     def _save_dataset_to(self, path: Path, oversized_choice: OversizedChoice = OversizedChoice.KEEP_IMPLICIT) -> None:
         if self._pending_errors:
