@@ -1581,3 +1581,82 @@ class TestTransferSyntaxRule:
                 f"compressed syntax changed: {saved.file_meta.TransferSyntaxUID}"
             )
             assert hasattr(saved, "PixelData"), "pixel data lost"
+
+    def test_large_contour_data_stays_implicit(self, qapp, monkeypatch):
+        """ContourData (3006,0050) over 64KB: keep Implicit VR LE.
+        Note: synthetic fixture — IDC RTSS not available in this clone."""
+        w = M.DCMQtreePy()
+        monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)
+        ds = _base()
+        # 9000 values of "0.0" = ~36KB string, plus backslashes = ~45KB — under limit
+        # need over 65534 bytes: 20000 values of "0.000" = ~120KB
+        large_ds = ["0.000"] * 20000
+        ds.add_new(pydicom.tag.Tag(0x3006, 0x0050), "DS", large_ds)
+        with tempfile.TemporaryDirectory() as td:
+            src = pathlib.Path(td) / "large-contour.dcm"
+            ds.ensure_file_meta()
+            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+            ds.is_implicit_VR = True
+            pydicom.dcmwrite(src, ds, write_like_original=False)
+            w.populate_tree_widget_from_file(str(src))
+            out = pathlib.Path(td) / "large-contour-out.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian, (
+                f"large DS source saved as {saved.file_meta.TransferSyntaxUID}"
+            )
+            elem = saved.get(pydicom.tag.Tag(0x3006, 0x0050))
+            assert elem is not None
+            assert elem.VR == "DS", f"ContourData became {elem.VR}"
+            assert list(elem.value) == large_ds, "ContourData values changed"
+
+    def test_large_contour_with_private_warns_and_stays_implicit(self, qapp, monkeypatch):
+        """Large DS + private elements: warn (informational), keep implicit."""
+        w = M.DCMQtreePy()
+        fired = []
+        monkeypatch.setattr(
+            w,
+            "non_native_warning_message",
+            lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
+        )
+        ds = _base()
+        large_ds = ["0.000"] * 20000
+        ds.add_new(pydicom.tag.Tag(0x3006, 0x0050), "DS", large_ds)
+        ds.private_block(0x0009, "TESTPRIV", create=True).add_new(0x10, "LO", "val")
+        with tempfile.TemporaryDirectory() as td:
+            src = pathlib.Path(td) / "large-priv.dcm"
+            ds.ensure_file_meta()
+            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+            ds.is_implicit_VR = True
+            pydicom.dcmwrite(src, ds, write_like_original=False)
+            w.populate_tree_widget_from_file(str(src))
+            out = pathlib.Path(td) / "large-priv-out.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
+            assert any("warning" in t.lower() for t in fired), f"no warning: {fired}"
+
+    def test_large_contour_without_private_no_warning(self, qapp, monkeypatch):
+        """Large DS, no private elements: keep implicit, no warning."""
+        w = M.DCMQtreePy()
+        fired = []
+        monkeypatch.setattr(
+            w,
+            "non_native_warning_message",
+            lambda title="", text="", buttons=None: fired.append(title) or QMessageBox.Ok,
+        )
+        ds = _base()
+        large_ds = ["0.000"] * 20000
+        ds.add_new(pydicom.tag.Tag(0x3006, 0x0050), "DS", large_ds)
+        with tempfile.TemporaryDirectory() as td:
+            src = pathlib.Path(td) / "large-nopriv.dcm"
+            ds.ensure_file_meta()
+            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+            ds.is_implicit_VR = True
+            pydicom.dcmwrite(src, ds, write_like_original=False)
+            w.populate_tree_widget_from_file(str(src))
+            out = pathlib.Path(td) / "large-nopriv-out.dcm"
+            w._save_dataset_to(out)
+            saved = pydicom.dcmread(out, force=True)
+            assert saved.file_meta.TransferSyntaxUID == pydicom.uid.ImplicitVRLittleEndian
+            assert not any("warning" in t.lower() for t in fired), f"unexpected warning: {fired}"

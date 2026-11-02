@@ -614,15 +614,31 @@ class DCMQtreePy(QMainWindow):
         modified_ds.ensure_file_meta()
         # Transfer syntax rule (Stuart 2026-11-01/02, issue #57): downstream systems
         # are the customer of the output — saved files must carry their VRs.
-        #   Implicit VR LE  → Explicit VR LE (private elements need VRs downstream)
-        #   Explicit VR BE  → keep as-is (Stuart 2026-11-02: it already carries VRs;
-        #     converting via pydicom 2.4.5 silently corrupts pixel bytes)
-        #   Explicit VR LE and compressed/encapsulated → keep (already carry VRs;
-        #     forcing uncompressed onto encapsulated pixel data writes invalid files)
+        #   Implicit VR LE  → Explicit VR LE, EXCEPT when ContourData (3006,0050) or
+        #     CompensatorThicknessData (300A,00E6) exceeds 64KB: keep Implicit VR LE
+        #     (pydicom 2.4.5 rewrites large DS as UN under explicit, silently corrupting).
+        #     If private elements are also present, warn (informational, no choice):
+        #     implicit means downstream consumers need those private VRs.
+        #   Explicit VR BE  → keep as-is (converting corrupts pixel bytes)
+        #   Explicit VR LE and compressed/encapsulated → keep (already carry VRs)
         ts = modified_ds.file_meta.TransferSyntaxUID
         if not ts or ts == pydicom.uid.ImplicitVRLittleEndian:
-            modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
-        modified_ds.is_implicit_VR = False  # we never write implicit (issue #57)
+            has_large_ds = self._has_oversized_ds(modified_ds)
+            has_private = any(k.group % 2 == 1 for k in modified_ds.keys())
+            if has_large_ds and has_private:
+                self.non_native_warning_message(
+                    "Save warning",
+                    "Large DS element (>64KB) and private elements present. "
+                    "Saving as Implicit VR LE to avoid corrupting the DS data. "
+                    "Downstream consumers will need the private dictionary.",
+                    QMessageBox.Ok,
+                )
+            if not has_large_ds:
+                modified_ds.file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
+                modified_ds.is_implicit_VR = False
+            # else: keep Implicit VR LE
+        else:
+            modified_ds.is_implicit_VR = False  # explicit BE and LE carry VRs
         # Atomic write: temp in same directory, fsync, os.replace (issue #43)
         tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         tmp_path = Path(tmp_name)
@@ -650,6 +666,22 @@ class DCMQtreePy(QMainWindow):
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
+
+    @staticmethod
+    def _has_oversized_ds(ds) -> bool:
+        """Check if ContourData (3006,0050) or CompensatorThicknessData (300A,00E6)
+        exceeds 64KB (Stuart 2026-11-02: only these two are known to overflow)."""
+        for tag in (pydicom.tag.Tag(0x3006, 0x0050), pydicom.tag.Tag(0x300A, 0x00E6)):
+            elem = ds.get(tag)
+            if elem is not None and elem.VR == "DS":
+                val = elem.value
+                if isinstance(val, (list, tuple)):
+                    total = sum(len(str(v)) for v in val) + len(val)
+                else:
+                    total = len(str(val))
+                if total > 65534:
+                    return True
+        return False
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
