@@ -902,8 +902,8 @@ class DCMQtreePy(QMainWindow):
                         QMessageBox.Ok,
                     )
                     return
-        if public_element.tag in target_ds:
-            self._refuse_occupied_tag(public_element.tag)
+        # An existing element is replaced only if the user says so (Stuart, 3 Nov, on #88). The private path refuses.
+        if public_element.tag in target_ds and not self._ask_replace_existing(target_ds[public_element.tag]):
             return
         target_ds[public_element.tag] = public_element
         self._note_value_length(target_ds, public_element.tag)
@@ -1008,8 +1008,27 @@ class DCMQtreePy(QMainWindow):
             self._populate_tree_widget_item_from_element(parent, member_element)
             parent.sortChildren(0, Qt.AscendingOrder)
 
+    def _ask_replace_existing(self, existing: DataElement) -> bool:
+        """Ask whether an add may replace an element that already exists. No is the default; True only for Yes (#87)."""
+        app = QApplication.instance()
+        app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Warning)
+        dlg.setWindowTitle("Element already exists")
+        shown = self._value_cell_text(existing)
+        dlg.setText(
+            f"{existing.tag} {existing.keyword or existing.name} already exists"
+            + (f" with value: {shown[:200]}" if shown else "")
+            + ". Replace it with the added element?"
+        )
+        dlg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dlg.setDefaultButton(QMessageBox.StandardButton.No)
+        dlg.setProperty("help_id", "warnings")
+        dlg.exec()
+        return dlg.clickedButton() is dlg.button(QMessageBox.StandardButton.Yes)
+
     def _refuse_occupied_tag(self, tag) -> None:
-        """Adding never replaces an element: the existing value is kept and the user is told to edit it (#87)."""
+        """A private add never replaces a member: the existing value is kept and the user is told to edit it (#87)."""
         self.non_native_warning_message(
             "Add refused",
             f"{pydicom.tag.Tag(tag)} already exists here. Edit its value in the tree instead; adding never replaces it.",

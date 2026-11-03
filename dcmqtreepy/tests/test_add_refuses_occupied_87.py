@@ -1,4 +1,5 @@
-"""#87: adding an element never replaces one that exists, and a new private creator never adopts orphaned members.
+"""#87: a private add never replaces a member that exists, a public add asks first (Stuart, on #88), and a new private
+creator never adopts orphaned members.
 
 Before, the add wrote straight over an occupied tag (CT_small's 80-byte OB payload became text) and treated a slot with
 members but no creator as free, so the new creator took over those members and could overwrite them. Both were silent.
@@ -140,15 +141,65 @@ def test_a_new_creator_does_not_adopt_an_orphaned_block(qapp, monkeypatch, tmp_p
     assert fired == []
 
 
-def test_public_add_of_an_existing_element_is_refused(qapp, monkeypatch) -> None:
-    """The same defect on the public path: Add replaced PatientID silently."""
-    fired: list[str] = []
-    w = _widget(monkeypatch, get_testdata_file("CT_small.dcm"), fired)
+def _answer(monkeypatch, w, yes: bool) -> list:
+    asked: list = []
+    monkeypatch.setattr(w, "_ask_replace_existing", lambda existing: asked.append(existing.tag) or yes)
+    return asked
+
+
+def test_public_add_of_an_existing_element_answered_no_changes_nothing(qapp, monkeypatch) -> None:
+    """Stuart's ruling on #88: ask first; No leaves the element as it was."""
+    w = _widget(monkeypatch, get_testdata_file("CT_small.dcm"), [])
+    asked = _answer(monkeypatch, w, False)
     before = w.current_dataset.PatientID
     monkeypatch.setattr(M, "AddPublicElementDialog", _public_dialog(0x00100020, "LO", "REPLACED"))
 
     w.on_add_element()
 
+    assert asked == [pydicom.tag.Tag(0x00100020)]
     assert w.current_dataset.PatientID == before
-    assert fired == ["Add refused"]
     assert not w.has_edits
+
+
+def test_public_add_of_an_existing_element_answered_yes_replaces_it(qapp, monkeypatch) -> None:
+    w = _widget(monkeypatch, get_testdata_file("CT_small.dcm"), [])
+    asked = _answer(monkeypatch, w, True)
+    monkeypatch.setattr(M, "AddPublicElementDialog", _public_dialog(0x00100020, "LO", "REPLACED"))
+
+    w.on_add_element()
+
+    assert asked == [pydicom.tag.Tag(0x00100020)]
+    assert w.current_dataset.PatientID == "REPLACED"
+    assert w.has_edits
+
+
+def test_public_add_of_an_absent_element_does_not_ask(qapp, monkeypatch) -> None:
+    w = _widget(monkeypatch, get_testdata_file("CT_small.dcm"), [])
+    asked = _answer(monkeypatch, w, False)
+    assert "SeriesDescription" not in w.current_dataset
+    monkeypatch.setattr(M, "AddPublicElementDialog", _public_dialog(0x0008103E, "LO", "ADDED"))
+
+    w.on_add_element()
+
+    assert asked == []
+    assert w.current_dataset.SeriesDescription == "ADDED"
+
+
+@pytest.mark.parametrize(
+    ("button", "expected"), [(QMessageBox.StandardButton.Yes, True), (QMessageBox.StandardButton.No, False)]
+)
+def test_replace_dialog_buttons_map_to_the_answer_and_no_is_default(qapp, monkeypatch, button, expected) -> None:
+    w = _widget(monkeypatch, get_testdata_file("CT_small.dcm"), [])
+    seen: dict = {}
+
+    def click(dlg: QMessageBox) -> int:
+        seen["default"] = dlg.defaultButton() is dlg.button(QMessageBox.StandardButton.No)
+        seen["text"] = dlg.text()
+        dlg.button(button).click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", click)
+
+    assert w._ask_replace_existing(w.current_dataset["PatientID"]) is expected
+    assert seen["default"], "No must be the default button"
+    assert "(0010, 0020) PatientID already exists" in seen["text"]
