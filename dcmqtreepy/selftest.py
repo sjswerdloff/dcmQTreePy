@@ -209,6 +209,17 @@ def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None, repor
     except Exception as exc:
         report(f"selftest: cannot resolve input file: {exc}", err=True)
         return finish(2)
+    if report_path is not None:
+        try:
+            report_is_input = report_path.resolve() == src.resolve() or (
+                report_path.exists() and src.exists() and os.path.samefile(report_path, src)
+            )
+        except (OSError, RuntimeError) as exc:
+            report(f"selftest: cannot validate report path {report_path}: {exc}", err=True)
+            return 2
+        if report_is_input:
+            report("selftest: --report must not refer to the input DICOM", err=True)
+            return 2  # finish() would overwrite the input with the error report.
     if not src.is_file():
         report(f"selftest: input does not exist: {src}", err=True)
         return finish(2)

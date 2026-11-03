@@ -88,6 +88,22 @@ class TestSelftest:
         assert "selftest OK" in text
         assert text.endswith("exit=0\n")
 
+    @pytest.mark.parametrize("alias", ["same", "symlink", "hardlink"])
+    def test_report_alias_preserves_input_and_exits_2(self, ct_small: Path, tmp_path: Path, alias: str) -> None:
+        original = ct_small.read_bytes()
+        src = tmp_path / "input.dcm"
+        src.write_bytes(original)
+        report = src if alias == "same" else tmp_path / "report.txt"
+        if alias == "symlink":
+            report.symlink_to(src)
+        elif alias == "hardlink":
+            report.hardlink_to(src)
+
+        rc = selftest_main([str(src), "--platform", "offscreen", "--report", str(report)])
+
+        assert src.read_bytes() == original
+        assert rc == 2
+
     def test_missing_file_exits_2(self, tmp_path):
         assert run_selftest(tmp_path / "nope.dcm", "offscreen") == 2
 
