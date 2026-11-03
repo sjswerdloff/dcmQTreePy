@@ -903,7 +903,8 @@ class DCMQtreePy(QMainWindow):
                     )
                     return
         # An existing element is replaced only if the user says so (Stuart, 3 Nov, on #88). The private path refuses.
-        if public_element.tag in target_ds and not self._ask_replace_existing(target_ds[public_element.tag]):
+        replacing = public_element.tag in target_ds
+        if replacing and not self._ask_replace_existing(target_ds[public_element.tag]):
             return
         target_ds[public_element.tag] = public_element
         self._note_value_length(target_ds, public_element.tag)
@@ -911,8 +912,21 @@ class DCMQtreePy(QMainWindow):
         self.has_edits = True
         parent = self._add_parent_row()
         if parent is not None:
+            if replacing:
+                # One row per element: the replaced element's row goes, so no stale row shows or edits it (#87)
+                self._remove_element_rows(parent, public_element.tag)
             self._populate_tree_widget_item_from_element(parent, public_element)
             parent.sortChildren(0, Qt.AscendingOrder)
+
+    def _remove_element_rows(self, parent: QTreeWidgetItem, tag) -> None:
+        """Remove parent's element rows (not sequence item rows) for tag, with any pending errors under them."""
+        tag_text = str(pydicom.tag.Tag(tag))
+        for i in reversed(range(parent.childCount())):
+            row = parent.child(i)
+            is_item_row = row.text(2).isdigit() and row.text(0) == parent.text(0)
+            if row.text(0) == tag_text and not is_item_row:
+                self._drop_pending_errors_for_subtree(row)
+                parent.removeChild(row)
 
     def _add_parent_row(self) -> QTreeWidgetItem | None:
         """The tree row that a newly added element is shown under.

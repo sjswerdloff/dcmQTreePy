@@ -171,6 +171,12 @@ def test_public_add_of_an_existing_element_answered_yes_replaces_it(qapp, monkey
     assert asked == [pydicom.tag.Tag(0x00100020)]
     assert w.current_dataset.PatientID == "REPLACED"
     assert w.has_edits
+    top = w.dcm_tree_widget.topLevelItem(0)
+    rows = [top.child(i) for i in range(top.childCount()) if top.child(i).text(0) == "(0010, 0020)"]
+    assert [r.text(2) for r in rows] == ["REPLACED"], "the replaced element's old row is still shown"
+    rows[0].setText(2, "EDITED-AFTER")
+    assert w.current_dataset.PatientID == "EDITED-AFTER"
+    assert not w._pending_errors
 
 
 def test_public_add_of_an_absent_element_does_not_ask(qapp, monkeypatch) -> None:
