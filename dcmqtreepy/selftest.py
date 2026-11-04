@@ -14,24 +14,25 @@ itself (``dcmQTreePy --selftest``), which proves the bundle end to end:
   and the populated tree are non-empty;
 - opens the image in the bundled ``dcm_mini_viewer`` and asserts a real, non-null
   pixmap lands on its label;
-- save-unchanged with byte comparison: reads the sample, writes it back with
-  pydicom's writer (with the same ``ensure_file_meta`` + explicit-VR little-endian
-  finalization ``on_file_save_as`` performs), asserts the written bytes are
-  byte-identical to the input, and asserts determinism (two saves identical);
+- save-unchanged with byte comparison: saves the loaded dataset through the APP's real
+  save path ``_save_dataset_to`` (the one ``on_file_save_as`` calls and that ships) and
+  asserts the bytes are identical to the input, plus determinism (two saves identical).
+  Refs #55: this replaced a self-contained pydicom copy that had drifted from the app's
+  logic — a regression in ``_save_dataset_to`` (over-pruning, a bad atomic write) would not
+  have failed the copy, so it must fail through the real call. A transfer-syntax change is
+  not exercised by this byte-compare (connor's #56 review): CT_small is already Explicit VR
+  LE, so forcing ELE is byte-identical and the sample cannot surface it — #50 owns that test.
 - decodes a signed JPEG 2000 Lossless image made in memory and asserts it equals its
   source (#39), which in a packaged build also proves pylibjpeg's plugin was bundled.
 
-Why the save stage goes through pydicom's writer and not the tree round trip —
-probed on this host (macOS arm64, locked venv, pydicom 2.4.5) BEFORE wiring:
-the tree round trip is not save-unchanged. Tree cells carry text, so CT_small.dcm's
-private SL element (0009,1027) comes back as a string and raises OSError inside
-``dcmwrite`` through the app's own save path today (the app logs "element can not
-be copied/saved" for unresolvable private creators, and the "until save as is
-working" comments in dcmQTree.py mark this as known scope). A tree-path byte assert
-would fail the RELEASE build over the app's known save defects, not packaging —
-testing a product promise the app does not make. If the tree save path is later
-made faithful, switch ``_save_through_writer`` to the tree serialization here and
-the byte comparison stays exactly the same.
+Why ``_save_dataset_to`` and not the pydicom writer copy — #49 made the app's save path
+faithful (it saves from ``current_dataset`` with a deepcopy, keeps the source transfer
+syntax instead of forcing Explicit VR LE, prunes only creators emptied this session, and
+with #54 writes atomically). Verified this host (macOS arm64, locked venv): saving the
+unmodified CT_small.dcm through ``_save_dataset_to`` reproduces the input byte-for-byte,
+so the byte-identical and two-saves-agree asserts hold against the shipping code. The
+older tree-round-trip caveat no longer applies — #35 fixed the tree/save fidelity that
+made a tree-path assert fail before.
 
 Exit codes (no swallowed failures — CI checks the exit code directly):
   0  every stage passed
@@ -134,20 +135,6 @@ def _resolve_input(dicom_path: Path | None) -> Path:
     raise FileNotFoundError("no --selftest path argument and no sample at: " + ", ".join(searched))
 
 
-def _save_through_writer(src: Path, out_path: Path) -> None:
-    """Write the sample back with pydicom's writer, using the same file-meta
-    finalization as DCMQtreePy.on_file_save_as (ensure_file_meta + explicit
-    explicit-VR little-endian transfer syntax), sans dialog and sans tree."""
-    import pydicom
-    from pydicom import dcmwrite
-
-    ds = pydicom.dcmread(src, force=True)
-    ds.ensure_file_meta()
-    ds.is_implicit_VR = False
-    ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
-    dcmwrite(out_path, ds, write_like_original=False)
-
-
 # pylibjpeg-openjpeg has no Windows ARM64 wheel, so pyproject leaves it out there (the same
 # condition as its environment marker). Only on that platform is the J2K check skipped;
 # everywhere else a missing decoder is a failure.
@@ -222,6 +209,17 @@ def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None, repor
     except Exception as exc:
         report(f"selftest: cannot resolve input file: {exc}", err=True)
         return finish(2)
+    if report_path is not None:
+        try:
+            report_is_input = report_path.resolve() == src.resolve() or (
+                report_path.exists() and src.exists() and os.path.samefile(report_path, src)
+            )
+        except (OSError, RuntimeError) as exc:
+            report(f"selftest: cannot validate report path {report_path}: {exc}", err=True)
+            return 2
+        if report_is_input:
+            report("selftest: --report must not refer to the input DICOM", err=True)
+            return 2  # finish() would overwrite the input with the error report.
     if not src.is_file():
         report(f"selftest: input does not exist: {src}", err=True)
         return finish(2)
@@ -283,26 +281,34 @@ def run_selftest(dicom_path: Path | None, qpa_platform: str | None = None, repor
             if widget.dcm_tree_widget.topLevelItemCount() < 1:
                 failures.append("open: tree not populated")
 
-        # Stage 2: save it back and byte-compare — the packaged app's pydicom
-        # writer path (same finalization as on_file_save_as) must reproduce the
-        # sample byte-for-byte; and two saves must agree with each other.
+        # Stage 2: save it back through the app's REAL save path and byte-compare.
+        # #55: this MUST go through widget._save_dataset_to (what on_file_save_as calls and
+        # what ships), NOT a self-contained copy. A regression in _save_dataset_to — pruning
+        # too much, or a bad atomic write — fails the release self-test that runs on the shipped
+        # dmg. Note (connor's #56 review): byte-equality to the input catches changes to the
+        # *bytes written*; it does NOT specifically exercise a transfer-syntax change, because
+        # CT_small is already Explicit VR LE and forcing ELE again is byte-identical. #50 owns a
+        # dedicated non-ELE save regression test. For an unmodified dataset the real save IS
+        # byte-identical to the source (verified this host, CT_small, offscreen); two saves agree.
         try:
-            _save_through_writer(src, out_path)
+            widget._save_dataset_to(out_path)
         except Exception as exc:
-            failures.append(f"save: writer raised {exc!r}")
+            failures.append(f"save: _save_dataset_to raised {type(exc).__name__}: {exc}")
         else:
             saved_bytes = out_path.read_bytes()
             if saved_bytes != original_bytes:
-                failures.append(f"save: writer output differs from input ({len(saved_bytes)}B vs {len(original_bytes)}B)")
+                failures.append(
+                    f"save: _save_dataset_to output differs from input ({len(saved_bytes)}B vs {len(original_bytes)}B)"
+                )
             try:
-                _save_through_writer(src, out_path2)
+                widget._save_dataset_to(out_path2)
             except Exception as exc:
-                failures.append(f"save: second save raised {exc!r}")
+                failures.append(f"save: second _save_dataset_to raised {type(exc).__name__}: {exc}")
             else:
                 if out_path.read_bytes() != out_path2.read_bytes():
-                    failures.append("save: two saves of the same file are not byte-identical")
+                    failures.append("save: two saves through _save_dataset_to are not byte-identical")
                 else:
-                    notes.append("save: writer byte-identical to input and deterministic")
+                    notes.append("save: _save_dataset_to byte-identical to input and deterministic")
 
         # Stage 3: open the image in the bundled viewer and render it — the
         # dcm_mini_viewer path the GUI uses from on_view_image.

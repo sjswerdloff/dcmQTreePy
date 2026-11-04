@@ -20,7 +20,7 @@ permissions:
 defaults:
   run:
     shell: /opt/homebrew/bin/bash -eo pipefail {0}
-# github-main carries code from GitHub: on its PRs every job here waits for a person to add the github-reviewed
+# github-main carries code from GitHub: on its PRs the gates job waits for a person to add the github-reviewed
 # label (Stuart, 27 Oct, mirror-tools #15). The return path removes that label before it pushes new GitHub code.
 jobs:
   gates:
@@ -62,3 +62,22 @@ jobs:
         run: |
           uv run --locked python --version
           uv run --locked pytest dcmqtreepy/tests
+
+  # #41: a held PR's skipped gates must NOT show as passing. This job fails when
+  # gates was skipped (the github-reviewed hold), so Gitea reports the run as failed.
+  # When gates runs and passes, this passes too.
+  # Must never check out or run code — it only reads needs.gates.result.
+  required-check:
+    needs: [gates]
+    if: always()
+    runs-on: stuart-m3ultra-canary
+    steps:
+      - name: Verify gates ran
+        run: |
+          if [ "${{ needs.gates.result }}" = "success" ]; then
+            echo "gates passed"
+            exit 0
+          else
+            echo "gates did not pass: ${{ needs.gates.result }}"
+            exit 1
+          fi

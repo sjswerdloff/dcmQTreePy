@@ -589,13 +589,87 @@ jobs:
           [ -s release-assets/dcmQTreePy.exe ] || { echo "::error::Windows exe asset missing"; exit 1; }
           (cd release-assets && shasum -a 256 -c dcmQTreePy-arm64.dmg.sha256 && sha256sum -c dcmQTreePy.exe.sha256)
       - name: Create GitHub Release with assets
+        id: create
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.verify-inputs.outputs.tag }}
         run: |
+          # #46 finding 5. The gate above proved the tag was FREE at publish time, so any release
+          # object on TAG afterward was created by THIS run — that invariant, not an output flag, is
+          # what lets cleanup run safely even when create half-fails. If I gated cleanup on an output
+          # I write after `gh release create`, a mid-create failure (release object made, asset upload
+          # dies) would exit non-zero BEFORE the flag is set — cleanup would skip and leak the exact
+          # partial release #5 was written to remove. So create just runs; cleanup decides by asking
+          # the authenticated API whether a release now exists on the tag that was free moments ago.
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --generate-notes \
             --title "dcmQTreePy $TAG" \
             release-assets/*
           gh release view "$TAG" --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
+      - name: Cleanup partial release on failure (delete release + tag, leave run red)
+        if: failure() && steps.create.conclusion == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.verify-inputs.outputs.tag }}
+        run: |
+          # #46 finding 5 (cyril). `if: failure()` — so this runs on ANY publish-step failure,
+          # INCLUDING the case where `gh release create` itself half-failed (created the object,
+          # an asset upload died). The tag-free gate proved nothing pre-existing on TAG, so if a
+          # release exists here it is ours to remove. Deletes the release, then its own git tag
+          # (gh release delete only removes the tag with --cleanup-tag), verifying BOTH are gone via
+          # the AUTHENTICATED API. If no release exists (create failed cleanly before making one),
+          # there is nothing to clean and we note that — never deleting a tag we did not create.
+          # No swallowed errors (the #34-blocker-1 shape cyril reviewed). Run stays red BY DESIGN.
+          set -u
+          # Distinguish "not found" (nothing made - delete nothing) from "could not ask" (auth/network
+          # - do NOT claim clean). cora's 2nd point: `gh release view >/dev/null 2>&1` collapses both
+          # into "absent", so an auth error would wrongly report a clean nothing-to-do. Capture output.
+          VRC=0; VOUT="$(gh release view "$TAG" 2>&1)" || VRC=$?
+          if [ "$VRC" -ne 0 ]; then
+            case "$VOUT" in
+              *"not found"*|*"Not Found"*|*"404"*)
+                echo "no release present on $TAG (confirmed not-found) - create failed before making one"
+                echo "::error::publish failed after gh release create - no release present to clean; run intentionally red"
+                exit 1 ;;
+              *)
+                echo "::error::could not confirm release state of $TAG (authenticated view failed rc $VRC): $VOUT"
+                echo "::error::UNVERIFIED - do NOT assume absent; a human must check for a partial release $TAG"
+                exit 1 ;;
+            esac
+          fi
+          echo "found release on $TAG created by this run (create step failed) - deleting it and its tag"
+          RC=0
+          gh release delete "$TAG" --yes --cleanup-tag || RC=$?
+          echo "gh release delete exited $RC"
+          CLEAN_OK=1
+          # Proof of absence via the AUTHENTICATED API (GH_TOKEN), NOT git ls-remote — this repo is
+          # private and checkout ran persist-credentials:false, so an unauthenticated ls-remote returning
+          # empty would falsely read as 'gone'. gh release view fails on a deleted release; the git-refs
+          # endpoint returns 404 on a deleted tag. Both are authenticated, so an absence is real.
+          RVRC=0; RVOUT="$(gh release view "$TAG" 2>&1)" || RVRC=$?
+          if [ "$RVRC" -eq 0 ]; then
+            echo "::error::release $TAG still exists after cleanup delete"; CLEAN_OK=0
+          else
+            case "$RVOUT" in
+              *"not found"*|*"Not Found"*|*"404"*) echo "release $TAG verified gone (authenticated not-found)" ;;
+              *) echo "::error::release absence UNVERIFIED after delete (view rc $RVRC, not a clean not-found): $RVOUT"; CLEAN_OK=0 ;;
+            esac
+          fi
+          # NOTE (verified this host): `gh api --silent` exits rc=1 for BOTH 404 and other HTTP
+          # errors, so the exit code CANNOT distinguish 'gone' from 'could not ask'. Body-string match
+          # for Not Found/404 is therefore REQUIRED here, not a brittle shortcut - a reviewer or a
+          # future refactor must not replace it with an exit-code check, which would collapse the two
+          # cases cora asked to keep separate (a server error would then falsely read as 'deleted').
+          OUT="$(gh api "repos/{owner}/{repo}/git/refs/tags/${TAG}" 2>&1 || true)"
+          case "$OUT" in
+            *"Not Found"*|*"404"*) echo "tag $TAG verified gone (404)" ;;
+            *) echo "::error::tag $TAG absence UNVERIFIED or still present — lookup did not return a clean 404: $OUT"; CLEAN_OK=0 ;;
+          esac
+          if [ "$CLEAN_OK" -eq 1 ]; then
+            echo "cleanup OK: partial release $TAG deleted and tag verified gone via authenticated API; run left red on purpose"
+          else
+            echo "cleanup INCOMPLETE — residue/UNVERIFIED above; a human must delete the partial release $TAG manually"
+          fi
+          echo "::error::publish failed after gh release create — partial release $TAG cleaned (see log); this run is intentionally red"
+          exit 1

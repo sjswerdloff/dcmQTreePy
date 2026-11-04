@@ -3,7 +3,10 @@ import atexit
 import logging
 import os
 import sys
+import tempfile
+from copy import deepcopy
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 
 import platformdirs
@@ -15,6 +18,10 @@ from dcm_mini_viewer.config.preferences_manager import (
 )
 from dcm_mini_viewer.main import MainWindow as DcmMiniViewer
 from pydicom import DataElement, Dataset, Sequence, dcmread, dcmwrite
+from pydicom.datadict import dictionary_VR
+from pydicom.dataelem import RawDataElement
+from pydicom.multival import MultiValue
+from pydicom.tag import BaseTag
 from pydicom.valuerep import VR
 from pynetdicom.presentation import build_context
 
@@ -31,7 +38,6 @@ from PySide6.QtWidgets import (  # pylint: disable=no-name-in-module
     QMessageBox,
     QTreeWidget,
     QTreeWidgetItem,
-    QTreeWidgetItemIterator,
     QWhatsThis,
 )
 
@@ -46,6 +52,116 @@ from dcmqtreepy.qt_assistant_launcher import HelpAssistant
 
 logger = logging.getLogger(__name__)
 
+# VRs whose value is a byte payload. Their value cells are not editable, and a change to one is refused (#64).
+BINARY_VRS = frozenset({VR.OB, VR.OW, VR.OB_OW, VR.OD, VR.OF, VR.OL, VR.OV, VR.UN})
+INT_VRS = frozenset({"SS", "US", "SL", "UL", "SV", "UV"})
+FLOAT_VRS = frozenset({"FL", "FD", "DS"})
+# Always VM 1, and a backslash is legal inside the value, so their cell text is never split (#64).
+SINGLE_VALUED_TEXT_VRS = frozenset({"LT", "ST", "UT", "UR"})
+
+# VRs whose Explicit VR encoding has a 16-bit Value Length field (PS3.5 7.1.2). A value of one of these longer than
+# 0xFFFE cannot be written in Explicit VR except as UN (PS3.5 6.2.2, CP-1066) (#79).
+SHORT_LENGTH_VRS = frozenset(
+    {
+        "AE",
+        "AS",
+        "AT",
+        "CS",
+        "DA",
+        "DS",
+        "DT",
+        "FL",
+        "FD",
+        "IS",
+        "LO",
+        "LT",
+        "PN",
+        "SH",
+        "SL",
+        "SS",
+        "ST",
+        "TM",
+        "UI",
+        "UL",
+        "US",
+    }
+)
+MAX_SHORT_VALUE_LENGTH = 0xFFFE
+_BINARY_NUMBER_SIZES = {"AT": 4, "FL": 4, "FD": 8, "SL": 4, "SS": 2, "UL": 4, "US": 2}
+
+
+class OversizedChoice(Enum):
+    """How to save an Implicit VR source holding a value too long for Explicit VR (#79)."""
+
+    KEEP_IMPLICIT = "keep_implicit"
+    EXPLICIT_WITH_UN = "explicit_with_un"
+
+
+def _element_vr(tag: BaseTag, elem) -> str | None:
+    """The element's VR, from the dictionary when an Implicit VR raw element carries none."""
+    if elem.VR:
+        return str(elem.VR)
+    if tag.is_private:
+        return None
+    try:
+        return dictionary_VR(tag)
+    except KeyError:
+        return None
+
+
+def encoded_value_length(elem: DataElement) -> int:
+    """The length of elem's value as encoded, without encoding it (#79).
+
+    Only the VRs in SHORT_LENGTH_VRS are measured; any other VR returns 0. Text values are measured by their
+    backslash-joined form, padded to even length; binary numbers by count times size.
+    """
+    vr = str(elem.VR)
+    if vr not in SHORT_LENGTH_VRS or elem.value is None:
+        return 0
+    values = list(elem.value) if isinstance(elem.value, (list, tuple, MultiValue)) else [elem.value]
+    if vr in _BINARY_NUMBER_SIZES:
+        return len(values) * _BINARY_NUMBER_SIZES[vr]
+    text = "\\".join(getattr(v, "original_string", None) or str(v) for v in values)
+    length = len(text.encode("utf-8", errors="replace"))
+    return length + (length % 2)
+
+
+def find_oversized_elements(ds: Dataset) -> list[tuple[Dataset, BaseTag]]:
+    """Every element, at any depth, whose VR has a 16-bit length field and whose value is longer than 0xFFFE (#79).
+
+    Raw elements are measured by their recorded length, so their values are not converted; that is what makes this
+    cheap enough to run on every load (108 ms against 11.6 s for converting, on a 58.5 MB RT Structure Set).
+    Sequences are parsed to reach their items. Returns (dataset holding the element, tag) pairs.
+    """
+    found: list[tuple[Dataset, BaseTag]] = []
+    for tag in list(ds.keys()):
+        elem = ds.get_item(tag)
+        vr = _element_vr(tag, elem)
+        if vr == "SQ" or (vr is None and isinstance(elem, RawDataElement) and elem.length == 0xFFFFFFFF):
+            for item in ds[tag].value:
+                found.extend(find_oversized_elements(item))
+        elif vr in SHORT_LENGTH_VRS:
+            length = elem.length if isinstance(elem, RawDataElement) else encoded_value_length(elem)
+            if length > MAX_SHORT_VALUE_LENGTH:
+                found.append((ds, BaseTag(tag)))
+    return found
+
+
+def choose_transfer_syntax(
+    source_ts: str | None, has_oversized: bool, choice: OversizedChoice = OversizedChoice.KEEP_IMPLICIT
+) -> tuple[str, bool]:
+    """The (TransferSyntaxUID, is_implicit_VR) to save with (#57, #79).
+
+    Implicit VR LE (or no syntax recorded) becomes Explicit VR LE, so the file carries its VRs, unless a value is too
+    long for Explicit VR: then the choice decides. Every other source syntax is kept: converting big endian corrupts
+    pixel bytes, and Explicit VR LE and encapsulated syntaxes already carry VRs.
+    """
+    if not source_ts or source_ts == pydicom.uid.ImplicitVRLittleEndian:
+        if has_oversized and choice is OversizedChoice.KEEP_IMPLICIT:
+            return pydicom.uid.ImplicitVRLittleEndian, True
+        return pydicom.uid.ExplicitVRLittleEndian, False
+    return source_ts, False
+
 
 def resource_path(relative_path):
     """Get absolute path to resource, works for dev and for PyInstaller"""
@@ -56,6 +172,13 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
 
     return os.path.join(base_path, relative_path)
+
+
+def _get_umask() -> int:
+    """Get the current umask (only safe way is to set it and restore)."""
+    old = os.umask(0)
+    os.umask(old)
+    return old
 
 
 class DCMQtreePy(QMainWindow):
@@ -77,6 +200,7 @@ class DCMQtreePy(QMainWindow):
         # header.setStretchLastSection(False)
         # header.setSectionResizeMode(5, QHeaderView.Stretch)
         self.dcm_tree_widget.itemDoubleClicked.connect(self.on_tree_widget_item_double_clicked)
+        self.dcm_tree_widget.itemChanged.connect(self.on_tree_item_changed)
         self.ui.listWidget.itemSelectionChanged.connect(self.on_item_selection_changed)
         #     self.tree_del_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.dcm_tree_widget)
         #     self.tree_del_shortcut.activated.connect(self.handle_tree_delete_pressed)
@@ -98,6 +222,10 @@ class DCMQtreePy(QMainWindow):
         self.current_list_item = None
         self.reverting_list_item = False
         self.current_dataset = Dataset()
+        self._pruned_creators: list[tuple] = []  # (creator_tag, dataset_ref) for exact prune
+        self._pending_errors: dict[int, Exception] = {}  # keyed by id(row) — same tag in root+item are distinct
+        # Values too long for Explicit VR: (dataset holding the element, tag), recorded at load from raw lengths (#79)
+        self._oversized: list[tuple[Dataset, BaseTag]] = []
         self.has_edits = False
         pydicom.config.Settings.writing_validation_mode = pydicom.config.RAISE
         logging.info("Loading Known Private Dictionaries")
@@ -231,19 +359,49 @@ class DCMQtreePy(QMainWindow):
         if help_id := action.property("help_id"):
             self.logger.debug(f"Action has help_id: {help_id}")
 
+    @staticmethod
+    def _value_row_flags(elem: DataElement) -> Qt.ItemFlag:
+        """Flags for an element row: editable unless its value is a byte payload (#64)."""
+        flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+        if elem.VR not in BINARY_VRS:
+            flags |= Qt.ItemFlag.ItemIsEditable
+        return flags
+
+    @staticmethod
+    def _value_cell_text(elem: DataElement) -> str:
+        """The text shown in an element row's value cell. OB/OW/OD/OF payloads are not shown."""
+        if elem.VR in (VR.OB, VR.OW, VR.OB_OW, VR.OD, VR.OF):
+            return ""
+        if elem.value is None:
+            return ""
+        if isinstance(elem.value, (MultiValue, list)):
+            # The DICOM form, so the cell parses back into the same values (#64)
+            return "\\".join(str(v) for v in elem.value)
+        return str(elem.value)
+
+    @staticmethod
+    def _parse_value_cell_text(text: str, vr: str):
+        """A value cell's text as the value for vr: components separated by backslash, as DICOM encodes them (#64).
+
+        LT, ST, UT and UR are single-valued and taken as typed. An empty cell clears the value. Numeric components
+        are converted by VR, and one that does not convert raises ValueError.
+        """
+        if vr in SINGLE_VALUED_TEXT_VRS:
+            return text
+        convert = int if vr in INT_VRS else float if vr in FLOAT_VRS else None
+        if text == "":
+            return "" if convert is None else None
+        parts = text.split("\\")
+        values = parts if convert is None else [convert(part) for part in parts]
+        return values[0] if len(values) == 1 else values
+
     def _populate_tree_widget_item_from_element(self, parent: QTreeWidgetItem | QTreeWidget, elem: DataElement):
         if elem.VR != VR.SQ:
             tree_child_item = QTreeWidgetItem(parent)
-            tree_child_item.setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+            tree_child_item.setFlags(self._value_row_flags(elem))
             tree_child_item.setText(0, str(elem.tag))
             tree_child_item.setText(1, elem.name)
-            if elem.VR not in [VR.OB, VR.OW, VR.OB_OW, VR.OD, VR.OF]:
-                if elem.value is None:
-                    tree_child_item.setText(2, "")
-                else:
-                    tree_child_item.setText(2, str(elem.value))
-            else:
-                logging.warning("Need to stash away OB/OW type values")
+            tree_child_item.setText(2, self._value_cell_text(elem))
             tree_child_item.setText(3, str(elem.VR))
             tree_child_item.setText(4, elem.keyword)
         else:
@@ -267,16 +425,10 @@ class DCMQtreePy(QMainWindow):
         for elem in ds:
             if elem.VR != VR.SQ:
                 tree_child_item = QTreeWidgetItem(parent)
-                tree_child_item.setFlags(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+                tree_child_item.setFlags(self._value_row_flags(elem))
                 tree_child_item.setText(0, str(elem.tag))
                 tree_child_item.setText(1, elem.name)
-                if elem.VR not in [VR.OB, VR.OW, VR.OB_OW, VR.OD, VR.OF]:
-                    if elem.value is None:
-                        tree_child_item.setText(2, "")
-                    else:
-                        tree_child_item.setText(2, str(elem.value))
-                else:
-                    logging.warning("Need to stash away OB/OW type values")
+                tree_child_item.setText(2, self._value_cell_text(elem))
                 tree_child_item.setText(3, str(elem.VR))
                 tree_child_item.setText(4, elem.keyword)
             else:
@@ -506,15 +658,23 @@ class DCMQtreePy(QMainWindow):
             path = Path(file_name)
             self.previous_path = path.parent
             ds = dcmread(path, force=True)
+            # Before the tree build converts every value, while raw lengths are still free to read (#79)
+            self._oversized = find_oversized_elements(ds)
             # ds.remove_private_tags() # temporarily, until save as is working.
             self.current_dataset = ds
-            self.dcm_tree_widget.clear()
-            tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
-            context = build_context(ds.SOPClassUID)
-            abstract_syntax = str(context).splitlines()[0].split(sep=":")[1]
-            tree_child_item.setText(0, abstract_syntax)
-            self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
-            tree_child_item.setExpanded(True)
+            self._pending_errors.clear()  # clear per-file (cora 13021 #8)
+            self.dcm_tree_widget.blockSignals(True)
+            # Unblock even if building raises: blocked signals would keep later edits out of the dataset (#68)
+            try:
+                self.dcm_tree_widget.clear()
+                tree_child_item = QTreeWidgetItem(self.dcm_tree_widget)
+                context = build_context(ds.SOPClassUID)
+                abstract_syntax = str(context).splitlines()[0].split(sep=":")[1]
+                tree_child_item.setText(0, abstract_syntax)
+                self._populate_tree_widget_item_from_dataset(parent=tree_child_item, ds=ds)
+                tree_child_item.setExpanded(True)
+            finally:
+                self.dcm_tree_widget.blockSignals(False)
             self.has_edits = False
 
     def on_file_save_as(self):
@@ -524,53 +684,186 @@ class DCMQtreePy(QMainWindow):
             return
         path = Path(file_name)
         self.previous_save_path = path.parent
-        iterator = QTreeWidgetItemIterator(self.dcm_tree_widget)
-        tree_child_item = iterator.__next__().value()
-        modified_ds = Dataset()
-
-        # modified_ds.is_little_endian = True
-
-        for child_index in range(tree_child_item.childCount()):
-            child = tree_child_item.child(child_index)
-            self._populate_dataset_from_tree_widget_item(parent_ds=modified_ds, tree_widget_item=child)
-
-        if "PixelData" in self.current_dataset:
-            modified_ds["PixelData"] = self.current_dataset["PixelData"]
-        # modified_ds.fix_meta_info(enforce_standard=False)
-        modified_ds.ensure_file_meta()
-        #
-        modified_ds.is_implicit_VR = False
-        modified_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
-        # del modified_ds[0x300a0782]
-        # modified_ds.remove_private_tags() # temporary... first get save as working for public elements
-        dcmwrite(Path(file_name), modified_ds, write_like_original=False)
-        self.has_edits = False  # not quite true, but the data has been saved, so switching and losing the current edits is OK.
+        self._perform_save(str(path))
 
     def on_file_save(self):
         file_name = self.current_list_item.text()
         path = Path(file_name)
         self.previous_save_path = path.parent
-        iterator = QTreeWidgetItemIterator(self.dcm_tree_widget)
-        tree_child_item = iterator.__next__().value()
-        modified_ds = Dataset()
+        self._perform_save(str(path))
 
-        # modified_ds.is_little_endian = True
+    def _perform_save(self, path: str) -> bool:
+        """Save, asking first if a value is too long for Explicit VR.
 
-        for child_index in range(tree_child_item.childCount()):
-            child = tree_child_item.child(child_index)
-            self._populate_dataset_from_tree_widget_item(parent_ds=modified_ds, tree_widget_item=child)
+        An edited row whose element cannot be resolved is refused through its pending error, recorded by
+        on_tree_item_changed, which _save_dataset_to raises on (#71). Returns True on success, False on refusal.
+        """
+        choice = OversizedChoice.KEEP_IMPLICIT
+        if not self._pending_errors and self._source_is_implicit():
+            oversized = self._current_oversized()
+            if oversized:
+                asked = self._ask_oversized_choice(oversized)
+                if asked is None:
+                    return False
+                choice = asked
+        try:
+            durable = self._save_dataset_to(Path(path), choice)
+        except ValueError as e:
+            self.non_native_warning_message("Save refused", str(e), QMessageBox.Ok)
+            return False
+        self.has_edits = False
+        if not durable:
+            # Saved, but not confirmed durable: the file was replaced, so this is a warning, never a failure (#85)
+            self.non_native_warning_message(
+                "Saved, not confirmed durable",
+                f"{path} was saved, but the system could not confirm the save is durable. "
+                "If the computer loses power soon, the previous version of the file may come back.",
+                QMessageBox.Ok,
+            )
+        return True
 
-        if "PixelData" in self.current_dataset:
-            modified_ds["PixelData"] = self.current_dataset["PixelData"]
-        # modified_ds.fix_meta_info(enforce_standard=False)
+    def _save_dataset_to(self, path: Path, oversized_choice: OversizedChoice = OversizedChoice.KEEP_IMPLICIT) -> bool:
+        """Write the dataset to path atomically. Never shows a dialog.
+
+        Returns False when the file was written and replaced but the directory fsync failed, so the rename is not
+        confirmed durable (#85); True otherwise. Raises ValueError when the save is refused.
+        """
+        if self._pending_errors:
+            msgs = [str(e) for e in self._pending_errors.values()]
+            raise ValueError("; ".join(msgs))
+        # Prune creators emptied this session (cora 13021 #4) — exact tags, re-check at save
+        if self._pruned_creators:
+            for creator_tag, ds_ref in self._pruned_creators:
+                if ds_ref is self.current_dataset and creator_tag in self.current_dataset:
+                    block_byte = creator_tag.element
+                    group = creator_tag.group
+                    # Re-check the block is still empty (member may have been added)
+                    has_members = any(
+                        k.group == group and k.element >> 8 == block_byte and k.element != block_byte
+                        for k in self.current_dataset.keys()
+                    )
+                    if not has_members:
+                        del self.current_dataset[creator_tag]
+            self._pruned_creators.clear()
+        # Save from current_dataset, not from the tree (issue #35). The tree is a view;
+        # anything it cannot represent (private elements, OB/OW bytes) must survive.
+        modified_ds = deepcopy(self.current_dataset)
         modified_ds.ensure_file_meta()
-        #
-        modified_ds.is_implicit_VR = False
-        modified_ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
-        # del modified_ds[0x300a0782]
-        # modified_ds.remove_private_tags() # temporary... first get save as working for public elements
-        dcmwrite(Path(file_name), modified_ds, write_like_original=False)
-        self.has_edits = False  # not quite true, but the data has been saved, so switching and losing the current edits is OK.
+        # Transfer syntax (#57, #79): downstream systems need the VRs, so Implicit VR LE becomes Explicit VR LE, unless a
+        # value is too long for Explicit VR; then the user's choice decides. Other source syntaxes are kept.
+        ts = modified_ds.file_meta.get("TransferSyntaxUID") if modified_ds.file_meta else None
+        has_oversized = self._source_is_implicit() and bool(self._current_oversized())
+        new_ts, is_implicit = choose_transfer_syntax(ts, has_oversized, oversized_choice)
+        modified_ds.file_meta.TransferSyntaxUID = new_ts
+        modified_ds.is_implicit_VR = is_implicit
+        if new_ts in (pydicom.uid.ImplicitVRLittleEndian, pydicom.uid.ExplicitVRLittleEndian):
+            modified_ds.is_little_endian = True
+        # Write the file a symlink points to, not the link: os.replace would swap the link for a regular file and
+        # leave its target unchanged (#69). Resolving first keeps the temp file beside the real file, so the
+        # replace stays atomic.
+        path = path.resolve()
+        # Atomic write: temp in same directory, fsync, os.replace (issue #43)
+        durable = True
+        tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                dcmwrite(f, modified_ds, write_like_original=False)
+                f.flush()
+                os.fsync(f.fileno())
+            # Preserve target's permissions (mkstemp creates 0600)
+            if path.exists():
+                os.chmod(str(tmp_path), path.stat().st_mode & 0o7777)
+            else:
+                os.chmod(str(tmp_path), 0o666 & ~_get_umask())
+            os.replace(str(tmp_path), str(path))
+            # fsync the directory — POSIX only (Windows raises after replace)
+            if os.name == "posix":
+                try:
+                    dir_fd = os.open(str(path.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except OSError as e:
+                    logging.warning(f"Directory fsync failed (replace already succeeded): {e}")
+                    durable = False
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        return durable
+
+    def _source_is_implicit(self) -> bool:
+        """Whether the loaded file is Implicit VR LE, or records no transfer syntax."""
+        meta = getattr(self.current_dataset, "file_meta", None)
+        ts = meta.get("TransferSyntaxUID") if meta else None
+        return not ts or ts == pydicom.uid.ImplicitVRLittleEndian
+
+    def _note_value_length(self, ds: Dataset, tag) -> None:
+        """Record an edited or added element if its value is now too long for Explicit VR (#79)."""
+        tag = BaseTag(pydicom.tag.Tag(tag))
+        if tag in ds and encoded_value_length(ds[tag]) > MAX_SHORT_VALUE_LENGTH:
+            if not any(d is ds and t == tag for d, t in self._oversized):
+                self._oversized.append((ds, tag))
+
+    @staticmethod
+    def _reachable_datasets(ds: Dataset) -> set[int]:
+        """ids of ds and every sequence item under it. Only sequences are opened; other values are not converted."""
+        ids = {id(ds)}
+        for tag in list(ds.keys()):
+            elem = ds.get_item(tag)
+            vr = _element_vr(tag, elem)
+            if vr == "SQ" or (vr is None and isinstance(elem, RawDataElement) and elem.length == 0xFFFFFFFF):
+                for item in ds[tag].value:
+                    ids |= DCMQtreePy._reachable_datasets(item)
+        return ids
+
+    def _current_oversized(self) -> list[tuple[Dataset, BaseTag]]:
+        """The recorded elements still in the dataset and still too long for Explicit VR (#79).
+
+        An element in a deleted sequence item is no longer reachable, and an edit may have shortened a value, so only
+        the recorded elements are re-measured; nothing else is walked except the sequence structure.
+        """
+        if not self._oversized:
+            return []
+        reachable = self._reachable_datasets(self.current_dataset)
+        return [
+            (d, t)
+            for d, t in self._oversized
+            if id(d) in reachable and t in d and encoded_value_length(d[t]) > MAX_SHORT_VALUE_LENGTH
+        ]
+
+    def _ask_oversized_choice(self, oversized: list[tuple[Dataset, BaseTag]]) -> OversizedChoice | None:
+        """Ask how to save values too long for Explicit VR. None means cancel: nothing is written (#79)."""
+        names = sorted({f"{t} {pydicom.datadict.keyword_for_tag(t) or 'private'}" for _, t in oversized})
+        app = QApplication.instance()
+        app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Question)
+        dlg.setWindowTitle("Values too long for Explicit VR")
+        dlg.setText(
+            f"{len(oversized)} value(s) are longer than 65534 bytes, the most Explicit VR can hold for their VR: "
+            + ", ".join(names)
+        )
+        dlg.setInformativeText(
+            "Keep Implicit VR (default): the file carries no VRs. Private VRs then depend on the reader's dictionary, "
+            "and the file cannot be compressed or exported to media.\n\n"
+            "Explicit VR with UN: every other element keeps its VR. The listed elements are written as UN "
+            "(PS3.5 6.2.2), so a reader must know their VR to decode them; pydicom 2.4.5, and so this application, "
+            "reads them back as raw bytes."
+        )
+        keep = dlg.addButton("Keep Implicit VR", QMessageBox.ButtonRole.AcceptRole)
+        explicit_un = dlg.addButton("Explicit VR with UN", QMessageBox.ButtonRole.AcceptRole)
+        dlg.addButton(QMessageBox.StandardButton.Cancel)
+        dlg.setDefaultButton(keep)
+        dlg.setProperty("help_id", "warnings")
+        dlg.exec()
+        clicked = dlg.clickedButton()
+        if clicked is keep:
+            return OversizedChoice.KEEP_IMPLICIT
+        if clicked is explicit_un:
+            return OversizedChoice.EXPLICIT_WITH_UN
+        return None
 
     def on_add_element(self):
         add_element_dialog = AddPublicElementDialog(self)
@@ -596,18 +889,62 @@ class DCMQtreePy(QMainWindow):
                 element_value = value_list
 
         public_element.value = element_value
+        # Resolve target dataset (connor: single function)
+        target_ds = self.current_dataset
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
-                selected_item = selected_items[0]
-                vr_as_string = selected_item.text(3)
-                if len(vr_as_string) == 0 or vr_as_string == "SQ":
-                    parent = selected_item
-                else:
-                    parent = selected_item.parent()
-                self._populate_tree_widget_item_from_element(parent, public_element)
-                parent.sortChildren(0, Qt.AscendingOrder)
-                self.has_edits = True
+                target_ds = self._resolve_add_target(selected_items[0])
+                if target_ds is None:
+                    self.non_native_warning_message(
+                        "Add refused",
+                        "An element cannot be added directly to a sequence header. Select an item or element row.",
+                        QMessageBox.Ok,
+                    )
+                    return
+        # An existing element is replaced only if the user says so (Stuart, 3 Nov, on #88). The private path refuses.
+        replacing = public_element.tag in target_ds
+        if replacing and not self._ask_replace_existing(target_ds[public_element.tag]):
+            return
+        target_ds[public_element.tag] = public_element
+        self._note_value_length(target_ds, public_element.tag)
+        # The dataset changed, whatever was selected (#63).
+        self.has_edits = True
+        parent = self._add_parent_row()
+        if parent is not None:
+            if replacing:
+                # One row per element: the replaced element's row goes, so no stale row shows or edits it (#87)
+                self._remove_element_rows(parent, public_element.tag)
+            self._populate_tree_widget_item_from_element(parent, public_element)
+            parent.sortChildren(0, Qt.AscendingOrder)
+
+    def _remove_element_rows(self, parent: QTreeWidgetItem, tag) -> None:
+        """Remove parent's element rows (not sequence item rows) for tag, with any pending errors under them."""
+        tag_text = str(pydicom.tag.Tag(tag))
+        for i in reversed(range(parent.childCount())):
+            row = parent.child(i)
+            is_item_row = row.text(2).isdigit() and row.text(0) == parent.text(0)
+            if row.text(0) == tag_text and not is_item_row:
+                self._drop_pending_errors_for_subtree(row)
+                parent.removeChild(row)
+
+    def _add_parent_row(self) -> QTreeWidgetItem | None:
+        """The tree row that a newly added element is shown under.
+
+        With a row selected: an item or sequence row (empty or SQ VR) itself, otherwise the selected row's parent.
+        With nothing selected the element went into the root dataset, so it is shown under the root row (#63).
+        None when no file is loaded.
+        """
+        if self.dcm_tree_widget is None:
+            return None
+        selected_items = self.dcm_tree_widget.selectedItems()
+        if selected_items:
+            selected_item = selected_items[0]
+            vr_as_string = selected_item.text(3)
+            if len(vr_as_string) == 0 or vr_as_string == "SQ":
+                return selected_item
+            return selected_item.parent()
+        return self.dcm_tree_widget.topLevelItem(0)
 
     def on_add_private_element(self):
         add_element_dialog = AddPrivateElementDialog(self)
@@ -637,31 +974,100 @@ class DCMQtreePy(QMainWindow):
             else:
                 element_value = value_list
         private_element.value = element_value
+        # Resolve target dataset (connor: single function)
+        target_ds = self.current_dataset
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
             if selected_items is not None and len(selected_items) > 0:
-                selected_item = selected_items[0]
-                vr_as_string = selected_item.text(3)
-                if len(vr_as_string) == 0 or vr_as_string == "SQ":
-                    parent = selected_item
-                else:
-                    parent = selected_item.parent()
-                parent.childCount()
+                target_ds = self._resolve_add_target(selected_items[0])
+                if target_ds is None:
+                    self.non_native_warning_message(
+                        "Add refused",
+                        "An element cannot be added directly to a sequence header. Select an item or element row.",
+                        QMessageBox.Ok,
+                    )
+                    return
+        # The dialog built its block on a scratch dataset, so its tags assume creator slot 0x10. Resolve the block in the
+        # target dataset instead: that finds an existing creator or reserves the next free slot, and the creator element
+        # goes into the dataset with the member. The tree follows the dataset (#63).
+        slot = self._private_creator_slot(target_ds, block.group, block.private_creator)
+        if slot is None:
+            self.non_native_warning_message(
+                "Add refused",
+                f"Group {block.group:04X} has no free private creator slot (0010-00FF are all in use).",
+                QMessageBox.Ok,
+            )
+            return
+        member_tag = pydicom.tag.Tag(block.group, (slot << 8) | add_element_dialog.current_byte_offset)
+        if member_tag in target_ds:
+            self._refuse_occupied_tag(member_tag)
+            return
+        creator_tag = pydicom.tag.Tag(block.group, slot)
+        if creator_tag not in target_ds:
+            target_ds.add_new(creator_tag, "LO", block.private_creator)
+        creator_element = target_ds[creator_tag]
+        target_ds.add_new(member_tag, private_element.VR, private_element.value)
+        self._note_value_length(target_ds, member_tag)
+        member_element = target_ds[member_tag]
+        # The dataset changed, whatever was selected (#63).
+        self.has_edits = True
+        parent = self._add_parent_row()
+        if parent is not None:
+            shown_tags = {
+                pydicom.tag.Tag(self._convert_tag_as_string_to_tuple(parent.child(x).text(0)))
+                for x in range(parent.childCount())
+            }
+            if creator_element.tag not in shown_tags:
+                self._populate_tree_widget_item_from_element(parent, creator_element)
+            self._populate_tree_widget_item_from_element(parent, member_element)
+            parent.sortChildren(0, Qt.AscendingOrder)
 
-                children_tuples = [
-                    self._convert_tag_as_string_to_tuple(parent.child(x).text(0)) for x in range(parent.childCount())
-                ]
-                is_private_block_already_present = False
-                for child_tuple in children_tuples:
-                    if child_tuple[0] == block.group and child_tuple[1] == 0x10:
-                        is_private_block_already_present = True
+    def _ask_replace_existing(self, existing: DataElement) -> bool:
+        """Ask whether an add may replace an element that already exists. No is the default; True only for Yes (#87)."""
+        app = QApplication.instance()
+        app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Warning)
+        dlg.setWindowTitle("Element already exists")
+        shown = self._value_cell_text(existing)
+        dlg.setText(
+            f"{existing.tag} {existing.keyword or existing.name} already exists"
+            + (f" with value: {shown[:200]}" if shown else "")
+            + ". Replace it with the added element?"
+        )
+        dlg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dlg.setDefaultButton(QMessageBox.StandardButton.No)
+        dlg.setProperty("help_id", "warnings")
+        dlg.exec()
+        return dlg.clickedButton() is dlg.button(QMessageBox.StandardButton.Yes)
 
-                if not is_private_block_already_present:
-                    private_creator_element = DataElement((block.group, 0x10), "LO", block.private_creator)
-                    self._populate_tree_widget_item_from_element(parent, private_creator_element)
-                self._populate_tree_widget_item_from_element(parent, private_element)
-                parent.sortChildren(0, Qt.AscendingOrder)
-                self.has_edits = True
+    def _refuse_occupied_tag(self, tag) -> None:
+        """A private add never replaces a member: the existing value is kept and the user is told to edit it (#87)."""
+        self.non_native_warning_message(
+            "Add refused",
+            f"{pydicom.tag.Tag(tag)} already exists here. Edit its value in the tree instead; adding never replaces it.",
+            QMessageBox.Ok,
+        )
+
+    @staticmethod
+    def _private_creator_slot(ds: pydicom.Dataset, group: int, creator: str) -> int | None:
+        """The element byte (0x10-0xFF) of creator's block in ds, or of the first free slot if it has none. Writes nothing.
+
+        A slot is free only if it has no creator AND no members: members with no creator (an orphaned block) still
+        occupy it, so a new creator never adopts them (#87). Returns None if no slot is free. The caller adds the
+        creator element once it has checked the member tag. pydicom's Dataset.private_block() is not used: in pydicom
+        2.4.5 its cached block makes deepcopy of a dataset read from file recurse without end, and save deep-copies.
+        """
+        member_blocks = {tag.element >> 8 for tag in ds.keys() if tag.group == group and tag.element >= 0x1000}
+        free = None
+        for slot in range(0x10, 0x100):
+            elem = ds.get(pydicom.tag.Tag(group, slot))
+            if elem is None:
+                if free is None and slot not in member_blocks:
+                    free = slot
+            elif elem.value == creator:
+                return slot
+        return free
 
     @Slot()
     def dragEnterEvent(self, e):
@@ -694,6 +1100,145 @@ class DCMQtreePy(QMainWindow):
         self.ui.listWidget.takeItem(current_row)
 
     @Slot()
+    def on_tree_item_changed(self, item: QTreeWidgetItem, column: int):
+        if column != 2:
+            return
+        tag_as_string = item.text(0)
+        tag = self._convert_tag_as_string_to_tuple(tag_as_string)
+        new_value = item.text(2)
+        # Resolve the row's own dataset from its ancestor chain (cora 13021 #1)
+        parent_ds, _, _, _ = self._find_parent_dataset(item)
+        try:
+            elem = parent_ds[pydicom.tag.Tag(tag)]
+            if elem.VR in BINARY_VRS:
+                # A byte payload has no text form here: put the cell back and leave the value alone (#64)
+                was_blocked = self.dcm_tree_widget.blockSignals(True)
+                try:
+                    item.setText(2, self._value_cell_text(elem))
+                finally:
+                    self.dcm_tree_widget.blockSignals(was_blocked)
+                self.non_native_warning_message(
+                    "Edit refused", f"{tag_as_string} is {elem.VR}: a binary value cannot be edited as text.", QMessageBox.Ok
+                )
+                return
+            if elem.VR != "SQ":
+                elem.value = self._parse_value_cell_text(new_value, elem.VR)
+                self._note_value_length(parent_ds, tag)
+            # Clear per-row error on success (cora: correcting a bad edit unblocks save)
+            self._pending_errors.pop(id(item), None)
+        except (KeyError, ValueError) as e:
+            self._pending_errors[id(item)] = ValueError(f"{tag_as_string}: {e}")
+            pass
+        self.has_edits = True
+
+    def _drop_pending_errors_for_subtree(self, item: QTreeWidgetItem) -> None:
+        """Drop pending errors for a row and all its descendants (cora: removed subtrees)."""
+        self._pending_errors.pop(id(item), None)
+        for i in range(item.childCount()):
+            self._drop_pending_errors_for_subtree(item.child(i))
+
+    def _resolve_add_target(self, item: QTreeWidgetItem):
+        """Return the dataset where new children of this row belong.
+        Item row → that item's dataset. Element row → the row's dataset.
+        Sequence header → None (an element can't sit directly in a sequence).
+        (connor: single function, matching the tree's own rule)
+        """
+        # Sequence header (not an item): refuse (cora: element can't sit in a sequence)
+        if item.text(3) == "SQ" and not item.text(2).isdigit():
+            return None
+        parent = item.parent()
+        if parent is None:
+            return self.current_dataset
+        parent_tag_str = parent.text(0)
+        if "(" not in parent_tag_str:
+            return self.current_dataset
+        # Item row: tag matches parent + numeric value
+        if item.text(2).isdigit() and item.text(0) == parent.text(0):
+            parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(item)
+            if is_sq and seq_tag is not None:
+                seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ" and 0 <= item_idx < len(seq_elem.value):
+                    return seq_elem.value[item_idx]
+            return self.current_dataset
+        # Element row: the dataset that holds this element
+        parent_ds, _, _, _ = self._find_parent_dataset(item)
+        return parent_ds
+
+    def _find_parent_dataset(self, item: QTreeWidgetItem):
+        """Walk up the tree to find the Dataset that holds this element.
+        Returns (parent_ds, is_sequence_item, seq_tag, item_index).
+        """
+        parent = item.parent()
+        if parent is None:
+            return self.current_dataset, False, None, None
+        parent_tag_str = parent.text(0)
+        if "(" not in parent_tag_str:
+            return self.current_dataset, False, None, None
+        parent_tag = self._convert_tag_as_string_to_tuple(parent_tag_str)
+        # If the item itself is a sequence item (tag matches parent + numeric value)
+        if item.text(2).isdigit() and item.text(0) == parent.text(0):
+            seq_tag = parent_tag
+            # Resolve the dataset that owns this sequence (cora: nested seq-item)
+            owner_ds = self._find_sequence_owner(parent)
+            seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
+            if seq_elem is not None and seq_elem.VR == "SQ":
+                # The item's position under its header, never its displayed number, which a delete leaves stale (#65).
+                item_idx = parent.indexOfChild(item)
+                return owner_ds, True, seq_tag, item_idx
+            return self.current_dataset, False, None, None
+        # Climb through nested sequence items recursively
+        current = item
+        current_parent = item.parent()
+        while current_parent is not None:
+            current_tag_str = current_parent.text(0)
+            if "(" not in current_tag_str:
+                break
+            if current.text(2).isdigit() and current.text(0) == current_parent.text(0):
+                # current is a sequence item under current_parent (sequence header)
+                seq_tag = self._convert_tag_as_string_to_tuple(current_tag_str)
+                # Find the dataset that owns this sequence by climbing further
+                owner_ds = self._find_sequence_owner(current_parent)
+                seq_elem = owner_ds.get(pydicom.tag.Tag(seq_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ":
+                    item_idx = current_parent.indexOfChild(current)  # position, not displayed number (#65)
+                    if 0 <= item_idx < len(seq_elem.value):
+                        return seq_elem.value[item_idx], True, seq_tag, item_idx
+                return self.current_dataset, False, None, None
+            current = current_parent
+            current_parent = current_parent.parent()
+        return self.current_dataset, False, None, None
+
+    def _find_sequence_owner(self, header_item: QTreeWidgetItem):
+        """Find the Dataset that owns a sequence header row."""
+        parent = header_item.parent()
+        if parent is None:
+            return self.current_dataset
+        parent_tag_str = parent.text(0)
+        if "(" not in parent_tag_str:
+            return self.current_dataset
+        # If parent is a sequence item, recurse
+        if header_item.text(2).isdigit() and header_item.text(0) == parent.text(0):
+            return self._find_sequence_owner(parent)
+        # Climb through nested items
+        current = header_item
+        current_parent = header_item.parent()
+        while current_parent is not None:
+            ct_str = current_parent.text(0)
+            if "(" not in ct_str:
+                break
+            if current.text(2).isdigit() and current.text(0) == current_parent.text(0):
+                seq_tag = self._convert_tag_as_string_to_tuple(ct_str)
+                owner = self._find_sequence_owner(current_parent)
+                seq_elem = owner.get(pydicom.tag.Tag(seq_tag))
+                if seq_elem is not None and seq_elem.VR == "SQ":
+                    item_idx = current_parent.indexOfChild(current)  # position, not displayed number (#65)
+                    if 0 <= item_idx < len(seq_elem.value):
+                        return seq_elem.value[item_idx]
+                return self.current_dataset
+            current = current_parent
+            current_parent = current_parent.parent()
+        return self.current_dataset
+
     def handle_tree_delete_pressed(self, event):
         if self.dcm_tree_widget is not None:
             selected_items = self.dcm_tree_widget.selectedItems()
@@ -705,21 +1250,111 @@ class DCMQtreePy(QMainWindow):
                 tag_as_string = selected_item.text(0)
                 tag = self._convert_tag_as_string_to_tuple(tag_as_string)
                 if tag[0] % 2 == 1:
-                    private_block_byte = tag[1] % 256  # lower 8 bits...
-                    if private_block_byte == 0x10:
-                        # is_private_creator = True
+                    private_block_byte = tag[1] % 256
+                    if tag[1] >= 0x0010 and tag[1] <= 0x00FF:
+                        # Resolve the row's own dataset (cora: nested creator delete)
+                        parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
                         next_child = parent.child(child_index + 1)
-                        tag_as_string = next_child.text(0)
-                        tag = self._convert_tag_as_string_to_tuple(tag_as_string)
-                        if tag[0] % 2 == 1:
+                        if next_child is not None:
+                            tag_as_string2 = next_child.text(0)
+                            tag2 = self._convert_tag_as_string_to_tuple(tag_as_string2)
+                            if tag2[0] % 2 == 1:
+                                # Delete only members of THIS block (same group + block byte)
+                                for j in range(parent.childCount() - 1, child_index, -1):
+                                    member = parent.child(j)
+                                    member_tag = self._convert_tag_as_string_to_tuple(member.text(0))
+                                    if member_tag[0] == tag[0] and member_tag[1] >> 8 == private_block_byte:
+                                        try:
+                                            del parent_ds[pydicom.tag.Tag(member_tag)]
+                                            self._drop_pending_errors_for_subtree(member)
+                                            parent.takeChild(j)
+                                        except KeyError:
+                                            self.non_native_warning_message(
+                                                "Delete failed",
+                                                f"Element {member.text(0)} not found in dataset.",
+                                                QMessageBox.Ok,
+                                            )
+                                            return
+                                # Delete the creator element itself
+                                try:
+                                    del parent_ds[pydicom.tag.Tag(tag)]
+                                    self._drop_pending_errors_for_subtree(selected_item)
+                                except KeyError:
+                                    self.non_native_warning_message(
+                                        "Delete failed",
+                                        f"Creator {tag_as_string} not found in dataset.",
+                                        QMessageBox.Ok,
+                                    )
+                                    return
+                                parent.takeChild(child_index)
+                                self.has_edits = True
+                                return
+                # Sequence items share their parent tag and have numeric text(2)
+                is_seq_item = selected_item.text(2).isdigit() and selected_item.text(0) == parent.text(0)
+                if is_seq_item:
+                    # Deleting a sequence item — resolve owner dataset (cora: nested seq-item)
+                    parent_ds, is_sq, seq_tag, item_idx = self._find_parent_dataset(selected_item)
+                    if is_sq and seq_tag is not None:
+                        seq_elem = parent_ds.get(pydicom.tag.Tag(seq_tag))
+                        if seq_elem is not None and seq_elem.VR == "SQ":
+                            del seq_elem.value[item_idx]
+                            self._drop_pending_errors_for_subtree(selected_item)
+                else:
+                    # Deleting a regular element
+                    parent_ds, _, _, _ = self._find_parent_dataset(selected_item)
+                    # Refuse unresolvable private elements (cora 13021 #3)
+                    if tag[0] % 2 == 1 and tag[1] >= 0x0100:
+                        block_byte = tag[1] >> 8
+                        creator_tag = pydicom.tag.Tag(tag[0], block_byte)
+                        if creator_tag not in parent_ds:
                             self.non_native_warning_message(
-                                "Private Block has private elements",
-                                "Delete private elements in block before deleting Private Creator",
-                                buttons=QMessageBox.Ok,
+                                "Delete refused",
+                                f"Element {tag_as_string} has no private creator — cannot safely delete.",
+                                QMessageBox.Ok,
                             )
                             return
+                    try:
+                        del parent_ds[pydicom.tag.Tag(tag)]
+                        self._drop_pending_errors_for_subtree(selected_item)
+                        # Cyril 2026-11-01: keep empty items — do NOT prune here
+                        # Track emptied private blocks for creator prune (cora 13021 #4)
+                        # Only track root-level creators — nested items may share names
+                        if tag[0] % 2 == 1 and tag[1] >= 0x0100 and parent_ds is self.current_dataset:
+                            block_byte = tag[1] >> 8
+                            creator_tag = pydicom.tag.Tag(tag[0], block_byte)
+                            if creator_tag in parent_ds:
+                                # Check if block is now empty
+                                has_members = False
+                                for k in parent_ds.keys():
+                                    if k.group == tag[0] and k.element >> 8 == block_byte and k.element != block_byte:
+                                        has_members = True
+                                        break
+                                if not has_members:
+                                    self._pruned_creators.append((creator_tag, parent_ds))
+                    except KeyError:
+                        self.non_native_warning_message(
+                            "Delete failed",
+                            f"Element {tag_as_string} not found in dataset.",
+                            QMessageBox.Ok,
+                        )
+                        return
                 parent.takeChild(child_index)
+                if is_seq_item:
+                    self._renumber_item_rows(parent)
                 self.has_edits = True
+
+    def _renumber_item_rows(self, header: QTreeWidgetItem) -> None:
+        """Show each remaining item under a sequence header with its 1-based position (#65).
+
+        Resolution already uses the row's position, so this is what the user reads. Signals are blocked so the
+        rewrite is not taken as an edit.
+        """
+        blocked = self.dcm_tree_widget.blockSignals(True)
+        try:
+            for i in range(header.childCount()):
+                header.child(i).setText(2, str(i + 1))
+        finally:
+            self.dcm_tree_widget.blockSignals(blocked)
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyPress and event.key() == Qt.Key.Key_F1:
