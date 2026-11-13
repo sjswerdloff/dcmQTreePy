@@ -7,9 +7,11 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
-# Exact versions live in [tool.uv] constraint-dependencies below, not here: the
-# declarations keep their caret meaning. Medical repo: lockfile churn = behaviour
-# churn, so every version move is deliberate and named in its PR.
+# Exact versions live in uv.lock, not here: the declarations keep their caret meaning.
+# Medical repo: lockfile churn = behaviour churn, so versions move only in a reviewed PR,
+# monthly through Dependabot (Stuart, 8 Nov 2026) or by a named `uv lock --upgrade-package X`.
+# The [tool.uv] constraint-dependencies that duplicated uv.lock were dropped (Stuart, 13 Nov
+# 2026, #91): Dependabot could not move them, so its monthly PR would leave those pins behind.
 # #3 (Stuart, 27 Oct: Python 3.12 is the floor): streamlit and what only it pulls in
 # are unpinned and float to latest; the dev tooling moved to latest and is pinned;
 # tomli (never imported) is dropped. #4 (dcm-mini-viewer now Python 3.12-3.14, PySide6 >=6.9,
@@ -42,46 +44,6 @@ dev = [
     "pre-commit>=4.6.2,<5",
     "pyinstaller>=6.22.3,<7",
     "ruff>=0.15",
-]
-
-# Pins for everything except streamlit's own tree (#3: Stuart wants streamlit kept
-# current, so it and what only it pulls in are deliberately NOT constrained here).
-# [project].dependencies keeps Poetry's caret meaning (the declaration says what
-# the package PROMISES); these constraints hold the exact versions in uv.lock, so
-# uv's free re-resolution cannot move them. Bump with `uv lock --upgrade-package X`
-# after changing the pin here. Not constrained either: ruff (a floor in the dev
-# group) and PySide6's own sub-packages, which follow PySide6. Majors held by
-# dcm-mini-viewer's caps (Python, PySide6, numpy, pydicom) moved in #4.
-[tool.uv]
-constraint-dependencies = [
-    "altgraph==0.17.5",
-    "cfgv==3.5.0",
-    "distlib==0.4.4",
-    "filelock==4.2.4",
-    "identify==2.6.20",
-    "iniconfig==2.3.1",
-    "macholib==1.16.4",
-    "nodeenv==1.11.0",
-    "numpy==2.5.4",
-    "packaging==26.3",
-    "pefile==2024.8.26",
-    "platformdirs==4.13.5",
-    "pluggy==1.7.0",
-    "pre-commit==4.7.0",
-    "pydicom==2.4.5",
-    "pygments==2.21.0",
-    "pylibjpeg==2.1.0",
-    "pylibjpeg-openjpeg==2.6.0",
-    "pyinstaller-hooks-contrib==2026.9",
-    "pyinstaller==6.22.3",
-    "pynetdicom==2.1.1",
-    "PySide6==6.12.0",
-    "pytest==9.1.1",
-    "python-discovery==1.6.4",
-    "pyyaml==6.0.3",
-    "setuptools==84.2.1",
-    "typing-extensions==4.13.2",
-    "virtualenv==21.14.13",
 ]
 
 [tool.uv.sources]

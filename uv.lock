@@ -10,38 +10,6 @@ resolution-markers = [
     "python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
-[manifest]
-constraints = [
-    { name = "altgraph", specifier = "==0.17.5" },
-    { name = "cfgv", specifier = "==3.5.0" },
-    { name = "distlib", specifier = "==0.4.4" },
-    { name = "filelock", specifier = "==4.2.4" },
-    { name = "identify", specifier = "==2.6.20" },
-    { name = "iniconfig", specifier = "==2.3.1" },
-    { name = "macholib", specifier = "==1.16.4" },
-    { name = "nodeenv", specifier = "==1.11.0" },
-    { name = "numpy", specifier = "==2.5.4" },
-    { name = "packaging", specifier = "==26.3" },
-    { name = "pefile", specifier = "==2024.8.26" },
-    { name = "platformdirs", specifier = "==4.13.5" },
-    { name = "pluggy", specifier = "==1.7.0" },
-    { name = "pre-commit", specifier = "==4.7.0" },
-    { name = "pydicom", specifier = "==2.4.5" },
-    { name = "pygments", specifier = "==2.21.0" },
-    { name = "pyinstaller", specifier = "==6.22.3" },
-    { name = "pyinstaller-hooks-contrib", specifier = "==2026.9" },
-    { name = "pylibjpeg", specifier = "==2.1.0" },
-    { name = "pylibjpeg-openjpeg", specifier = "==2.6.0" },
-    { name = "pynetdicom", specifier = "==2.1.1" },
-    { name = "pyside6", specifier = "==6.12.0" },
-    { name = "pytest", specifier = "==9.1.1" },
-    { name = "python-discovery", specifier = "==1.6.4" },
-    { name = "pyyaml", specifier = "==6.0.3" },
-    { name = "setuptools", specifier = "==84.2.1" },
-    { name = "typing-extensions", specifier = "==4.13.2" },
-    { name = "virtualenv", specifier = "==21.14.13" },
-]
-
 [[package]]
 name = "altair"
 version = "6.3.0"

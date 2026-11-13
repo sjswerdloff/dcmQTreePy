@@ -1,0 +1,12 @@
+# Dependency version updates: once a month, all in one PR (Stuart, 8 Nov 2026: a monthly run, not chasing every
+# non-security change). The PR opens on GitHub and comes back to Gitea through the mirror's return path.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      all-dependencies:
+        patterns:
+          - "*"
