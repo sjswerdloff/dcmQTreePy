@@ -40,6 +40,8 @@ jobs:
 
     - name: Install uv
       uses: astral-sh/setup-uv@v10.3.2
+      with:
+        version: "0.13.8"
 
     # - name: Find Qt Assistant (macOS)
     #   if: matrix.os == 'macos-latest'
