@@ -42,11 +42,11 @@ jobs:
           echo /opt/homebrew/bin >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # uv is pinned (#21): its lockfile handling moves with its version, so a floating uv could fail every
-      # --locked gate with no cause in any PR. 0.9.9 is the uv the first Studio run (#12230) passed with.
+      # --locked gate with no cause in any PR. 0.13.8, the current release, Stuart 16 Nov (was 0.9.9, the first Studio run #12230).
       - name: uv, pinned
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
-          version: "0.9.9"
+          version: "0.13.8"
       - name: Which uv and host
         run: |
           echo "uv: $(command -v uv) -> $(uv --version)"

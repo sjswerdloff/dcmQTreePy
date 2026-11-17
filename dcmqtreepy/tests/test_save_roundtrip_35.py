@@ -1503,6 +1503,7 @@ class TestAtomicWrite:
             leftovers = [f for f in pathlib.Path(td).iterdir() if f.suffix == ".tmp"]
             assert not leftovers, f"temp files left behind: {leftovers}"
 
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX modes only: on Windows chmod sets just the read-only flag (#93)")
     def test_mode_preserved_on_replace(self, qapp, monkeypatch):
         w = M.DCMQtreePy()
         monkeypatch.setattr(w, "non_native_warning_message", lambda *a, **kw: QMessageBox.Ok)

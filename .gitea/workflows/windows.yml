@@ -1,0 +1,83 @@
+# The whole suite on Windows, then the packaged .exe started and self-tested (#93), on our Windows runners
+# (the HP or the Lenovo, whichever is free). Same shape as OnkoDICOM's .gitea/workflows/windows.yml.
+# GitHub's python-app.yml tests on Linux only and the Gitea ci.yml on the Mac Studio, so nothing else shows
+# dcmQTreePy running on Windows. No continue-on-error: a failure here fails the check.
+#
+# Nothing is installed on the PC: uv provides Python 3.12 and the project's own .venv in the checkout.
+name: windows
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - .gitea/workflows/windows.yml
+      - dcmqtreepy/**
+      - help/**
+      - pyproject.toml
+      - uv.lock
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: powershell
+jobs:
+  tests:
+    # The same hold as ci.yml: code from GitHub runs here only once a person has added github-reviewed.
+    if: (github.head_ref != 'github-main' || contains(github.event.pull_request.labels.*.name, 'github-reviewed'))
+    runs-on: windows
+    timeout-minutes: 60
+    env:
+      QT_QPA_PLATFORM: offscreen
+      # The floor, as on the Studio (ci.yml).
+      UV_PYTHON: "3.12"
+    steps:
+      # Don't fill the PC's disk (Stuart, 2 Oct): refuse below 20 GB free on C:.
+      - name: "Free space on C:"
+        run: |
+          $free = [math]::Round((New-Object System.IO.DriveInfo 'C').AvailableFreeSpace / 1GB, 1)
+          "runner: $env:COMPUTERNAME, C: free $free GB"
+          if ($free -lt 20) { throw "C: has $free GB free, below 20 GB: refusing" }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # uv is pinned as in ci.yml (#21). Its package cache is kept in a short folder of its own (Windows' 260-character
+      # path limit, as in OnkoDICOM); enable-cache: false means no upload to Gitea's cache server.
+      - name: uv, pinned
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.13.8"
+          cache-local-path: C:\uvc
+          enable-cache: false
+      - name: Install dependencies
+        run: |
+          uv sync --locked --dev
+          if ($LASTEXITCODE) { throw "uv sync failed" }
+          uv run --locked python --version
+      # HOME (USERPROFILE on Windows) is this job's own, so nothing the app saves carries over between jobs.
+      - name: Test with pytest (offscreen)
+        run: |
+          $home_dir = "$env:RUNNER_TEMP\home"
+          New-Item -ItemType Directory -Force $home_dir | Out-Null
+          $env:USERPROFILE = $home_dir
+          $env:HOME = $home_dir
+          uv run --locked pytest dcmqtreepy/tests -v
+          exit $LASTEXITCODE
+      # The release build's command (release.yml build-windows). --disable-windowed-traceback: an uncaught exception
+      # exits non-zero instead of opening a dialog nobody closes.
+      - name: PyInstaller onefile
+        run: |
+          uv run --locked pyinstaller --onefile --name=dcmQTreePy --windowed --disable-windowed-traceback --icon=help/icons/app_icon.png --add-data="help;help" dcmqtreepy/dcmQTree.py
+          if ($LASTEXITCODE) { throw "pyinstaller failed" }
+      # As in release.yml: the exe opens pydicom's CT_small.dcm by path, saves it byte-identical and renders it.
+      # A --windowed exe has no stderr, so the report goes to a file.
+      - name: Packaged self-test (offscreen)
+        timeout-minutes: 5
+        run: |
+          $ct_small = (uv run --locked python -c "import pathlib,pydicom;print(pathlib.Path(pydicom.__file__).parent/'data'/'test_files'/'CT_small.dcm')").Trim()
+          if (-not (Test-Path $ct_small)) { throw "CT_small.dcm not found in the locked venv" }
+          $report = Join-Path $env:RUNNER_TEMP "selftest.txt"
+          $p = Start-Process -FilePath "dist\dcmQTreePy.exe" -ArgumentList "--selftest","`"$ct_small`"","--platform","offscreen","--report","`"$report`"" -Wait -PassThru
+          if (Test-Path $report) { Get-Content $report } else { "no report file at $report" }
+          if ($null -eq $p.ExitCode -or $p.ExitCode -ne 0) { throw "selftest exited $($p.ExitCode); see the report above" }
+          "packaged selftest passed"
