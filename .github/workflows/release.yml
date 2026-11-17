@@ -50,7 +50,7 @@ jobs:
       version: ${{ steps.tagfrompyproject.outputs.version }}
       tag: ${{ steps.tagfrompyproject.outputs.tag }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       - name: dispatch is from main
@@ -114,7 +114,7 @@ jobs:
     runs-on: windows-latest
     environment: release
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -178,7 +178,7 @@ jobs:
         shell: bash
         run: |
           cd dist && sha256sum dcmQTreePy.exe > dcmQTreePy.exe.sha256 && cat dcmQTreePy.exe.sha256
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-unsigned
           path: |
@@ -194,7 +194,7 @@ jobs:
     needs: verify-inputs
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -283,7 +283,7 @@ jobs:
           # SHA-256 of the EXACT bytes uploaded; notarize re-checks after download so the bundle it
           # signs is provably the bundle that was self-tested here (integrity across the job hop).
           (cd dist && shasum -a 256 dcmQTreePy-adhoc.zip > dcmQTreePy-adhoc.zip.sha256 && cat dcmQTreePy-adhoc.zip.sha256)
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-arm64-adhoc-app
           path: |
@@ -303,7 +303,7 @@ jobs:
     runs-on: macos-14
     environment: release
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-arm64-adhoc-app
           path: dist
@@ -462,7 +462,7 @@ jobs:
             exit 1
           fi
           echo "purged: keychain verified gone, all four secret files verified absent"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-arm64-signed-notarised
           path: |
@@ -481,7 +481,7 @@ jobs:
     needs: [verify-inputs, notarize-macos-arm64]
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -490,7 +490,7 @@ jobs:
           enable-cache: true
       - name: Install pinned dependencies (for the pydicom sample path only — no build here)
         run: uv sync --locked --dev
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-arm64-signed-notarised
           path: inbound
@@ -552,7 +552,7 @@ jobs:
     permissions:
       contents: write # the ONLY job that writes: gh release create. Scoped here, not workflow-wide.
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job here git-pushes; writes are via gh + explicit GH_TOKEN. Do not persist any token into .git/config.
       # #46 finding-1 split: publish must pull ONLY the two shippable artifacts by name, NOT
@@ -562,11 +562,11 @@ jobs:
       # release-assets/ and gh release create would publish it next to the signed dmg: an unsigned
       # bundle on the public release page. Each name downloads into release-assets/ (merge-multiple
       # false is per-name here, so both land flat and `shasum -c` + `release-assets/*` stay valid).
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-arm64-signed-notarised
           path: release-assets
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-unsigned
           path: release-assets
